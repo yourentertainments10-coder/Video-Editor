@@ -14,6 +14,16 @@ Candidate generation (docs/MVP.md Section 6):
   set is every (file, in_ms) at 250 ms steps where in_ms + L fits inside
   the file with a 200 ms margin at each end."
 
+The 250 ms exploration spacing above is exactly what MVP.md specifies and
+is unchanged. What changed (a focused fix after Step 8 integration found
+it, not a redesign) is that each explored point is snapped to the
+nearest real frame boundary of the source file's own native fps before
+being kept as a candidate -- see ``_snap_ms_to_source_frame``'s docstring
+for exactly why: 250 ms is not a whole number of frames at common frame
+rates, and an unsnapped candidate could make the renderer's frame-
+accurate seek land mid-frame and lose a frame on render, discovered only
+once Steps 4 and 7 were run together end to end in Step 8.
+
 Scoring (docs/MVP.md Appendix, "the cutter's scoring function"):
 
   For slot s with length L frames and mean music energy e_s:
@@ -107,6 +117,59 @@ class ScoreBreakdown(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
+def _snap_ms_to_source_frame(in_ms: int, source_fps: float | None) -> int:
+    """Snap a millisecond timestamp to the nearest real frame boundary of
+    the SOURCE file's own native frame rate (``FootageMap.fps``) -- not
+    the timeline's fixed 30 fps. A source frame lands at ``k * (1000 /
+    source_fps)`` ms for integer ``k``; this rounds ``in_ms`` to the
+    nearest such ``k`` (Python's round-half-to-even on an exact tie --
+    deterministic either way, and irrelevant in practice since a tie
+    requires the timestamp to fall exactly halfway between two frames).
+
+    Found during Step 8 integration: candidate ``in_ms`` values are
+    generated at fixed 250 ms steps (docs/MVP.md Section 6), which is not
+    a whole number of frames at common frame rates (7.5 frames at
+    30 fps). A candidate whose ``in_ms`` does not land on the source's
+    own frame grid makes the renderer's frame-accurate ``-ss`` seek
+    (poc/execute/render.py, unmodified) land mid-frame, which can render
+    that one segment exactly one frame short. Snapping here -- at
+    candidate-generation time, using the source's real fps -- removes
+    the misalignment at its origin instead of compensating for it in the
+    renderer.
+
+    If the source fps is unknown (``None`` or non-positive --
+    ``FootageMap.fps`` is ``None`` when ffmpeg's banner had no parseable
+    fps token), the timestamp is returned unchanged: there is no frame
+    grid to snap to, and this is the same behavior as before this fix.
+
+    The frame index nearest ``in_ms`` is chosen by ordinary rounding, but
+    converting that index back to an integer millisecond value always
+    rounds DOWN (floor), never to the nearest ms. This matters: at 30 fps
+    a frame boundary falls at a repeating decimal (33.333... ms), which
+    ``Source.in_ms`` (an integer) can only approximate either just before
+    or just after the true boundary. Empirically (measured while fixing
+    this), a computed timestamp even a fraction of a millisecond PAST a
+    frame's true start can make FFmpeg's accurate ``-ss`` seek combined
+    with the segment command's constant-fps conversion (``-r``) drop the
+    trailing frame of a ``-t``-bounded segment; a timestamp at or before
+    the true boundary does not. Flooring guarantees the emitted in_ms
+    never seeks past the intended frame.
+    """
+    if not source_fps or source_fps <= 0:
+        return in_ms
+    frame_duration_ms = 1000.0 / source_fps
+    nearest_frame_index = round(in_ms / frame_duration_ms)
+    # Floor via truncation, with a tiny epsilon guard: floating-point
+    # multiplication of a non-terminating frame duration (e.g. 1000/30 =
+    # 33.333...) can land a hair BELOW the true integer value it should
+    # represent (measured: 133 of 400 frame indices at 30 fps undershoot
+    # by exactly the float rounding error), which plain int() truncation
+    # would then floor an extra millisecond too far. The epsilon is far
+    # smaller than any real sub-millisecond drift this function cares
+    # about and only cancels float noise at the truncation boundary.
+    return int(nearest_frame_index * frame_duration_ms + 1e-6)
+
+
 def generate_candidates(
     footage_maps: dict[str, FootageMap],
     slot_frames: int,
@@ -115,10 +178,15 @@ def generate_candidates(
     margin_ms: int = CANDIDATE_MARGIN_MS,
     step_ms: int = CANDIDATE_STEP_MS,
 ) -> dict[str, list[int]]:
-    """Every (file, in_ms) at ``step_ms`` steps where the slot fits inside
-    the file with ``margin_ms`` at each end. A file too short for this
-    slot length contributes an empty list, not an error -- the whole
-    footage set may still have other files with room."""
+    """Every (file, in_ms) explored at ``step_ms`` steps (docs/MVP.md
+    Section 6, unchanged), then snapped to the nearest real frame
+    boundary of that file's own native fps and re-checked against the
+    ``margin_ms`` fit -- so every candidate actually written into a
+    Timeline corresponds to a real, exact source frame, never a
+    timestamp between two frames. A file too short for this slot length
+    contributes an empty list, not an error -- the whole footage set may
+    still have other files with room.
+    """
     slot_length_ms = frame_to_ms(slot_frames, fps=fps)
     candidates: dict[str, list[int]] = {}
     for path, footage_map in footage_maps.items():
@@ -126,7 +194,18 @@ def generate_candidates(
         if max_in_ms < margin_ms:
             candidates[path] = []
             continue
-        candidates[path] = list(range(margin_ms, max_in_ms + 1, step_ms))
+
+        raw_points = range(margin_ms, max_in_ms + 1, step_ms)
+        snapped_points = {_snap_ms_to_source_frame(p, footage_map.fps) for p in raw_points}
+        # Re-validate the margin/fit after snapping: snapping can move a
+        # point by up to half a source frame, which could -- only ever
+        # at the very edges of the valid range -- push it just outside
+        # the bounds that were satisfied before snapping. Such a point is
+        # dropped, not clamped, to keep the result exact and simple.
+        candidates[path] = sorted(
+            p for p in snapped_points
+            if margin_ms <= p and p + slot_length_ms <= footage_map.duration_ms - margin_ms
+        )
     return candidates
 
 

@@ -34,12 +34,20 @@ def test_candidates_stay_inside_source_duration_with_margin():
         assert in_ms + slot_length_ms <= fm.duration_ms - CANDIDATE_MARGIN_MS
 
 
-def test_candidates_are_spaced_by_the_step_size():
-    fm = make_footage_map(40, duration_ms=10_000)
+def test_candidates_are_spaced_by_approximately_the_step_size():
+    # Since the fix (candidates are snapped to the source's real frame
+    # grid via floor-rounding -- see test_candidate_snapping.py), spacing
+    # is no longer exactly CANDIDATE_STEP_MS: each point can move by up
+    # to half a source frame to find its nearest frame, then floor by up
+    # to another whole frame when converted back to an integer
+    # millisecond. At the fixture's default 30 fps (~33.3 ms/frame) that
+    # bounds the deviation to a little under one full frame duration.
+    fm = make_footage_map(40, duration_ms=10_000)  # default fps=30.0
     candidates = generate_candidates({"a.mp4": fm}, slot_frames=30)
     in_points = candidates["a.mp4"]
     spacings = [b - a for a, b in zip(in_points, in_points[1:])]
-    assert all(s == CANDIDATE_STEP_MS for s in spacings)
+    frame_duration_ms = 1000.0 / fm.fps
+    assert all(abs(s - CANDIDATE_STEP_MS) <= frame_duration_ms + 1 for s in spacings)
 
 
 def test_file_too_short_for_slot_yields_no_candidates():

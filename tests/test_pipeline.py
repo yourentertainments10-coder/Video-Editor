@@ -12,21 +12,21 @@ below for that exact failure mode as a *feature*, not a bug). A simple
 periodic click (a short tone burst every 0.5 s = 120 BPM) is enough.
 
 A note on output duration precision (found during Step 8 integration,
-not present in any single component's own tests): Step 6/7's candidate
-generation steps in_ms by exactly 250 ms (docs/MVP.md Section 6,
-verbatim), which is 7.5 frames at 30 fps -- not a whole number. Roughly
-half of all selected clips therefore start on a source timestamp that
-does not land exactly on the source's own frame grid. Step 4's renderer
-re-encodes each segment with an accurate `-ss` seek, and a segment whose
-seek point falls mid-frame can come out exactly one frame short. This is
-a genuine interaction between two independently-correct, independently-
-approved components (Step 4's renderer matches docs/MVP.md's renderer
-notes exactly; Step 7's candidate stepping matches docs/MVP.md Section 6
-exactly) that only surfaces once they are wired together -- exactly what
-Step 8 exists to discover, not silently fix. Tests here assert duration
-within a small, explicit, documented tolerance rather than to the exact
-frame, and one test measures and bounds the effect directly so a future
-regression that makes it worse is caught.
+fixed as a Step 8 follow-up): Step 6/7's candidate generation steps
+in_ms by exactly 250 ms (docs/MVP.md Section 6, verbatim), which is
+7.5 frames at 30 fps -- not a whole number. Roughly half of all selected
+clips used to start on a source timestamp that did not land exactly on
+the source's own frame grid, and Step 4's renderer (unmodified) could
+render such a segment exactly one frame short. This was a genuine
+interaction between two independently-correct components that only
+surfaced once they were wired together -- exactly what Step 8 exists to
+discover. It is now fixed at its origin: poc.decide.cutter's candidate
+generation snaps every explored timestamp to a real frame boundary of
+the source's own native fps before it is ever considered a candidate
+(see poc/decide/cutter.py's ``_snap_ms_to_source_frame``). The renderer
+was not touched. test_full_pipeline_no_systematic_frame_loss_end_to_end
+below asserts the declared and rendered durations now match exactly,
+which is the regression test for this fix.
 """
 from __future__ import annotations
 
@@ -104,7 +104,7 @@ def test_full_pipeline_cutter_mode_produces_every_artifact(project):
     assert validate(tl) == []
 
 
-def test_full_pipeline_output_is_a_playable_video_within_documented_tolerance(project):
+def test_full_pipeline_output_is_a_playable_video_with_correct_streams(project):
     output_path = project["out_dir"] / "final.mp4"
     result = run_pipeline(
         project["footage_dir"], project["music_path"], "energetic", 10.0, output_path
@@ -113,14 +113,47 @@ def test_full_pipeline_output_is_a_playable_video_within_documented_tolerance(pr
     assert media.has_video
     assert media.has_audio
     assert media.fps == pytest.approx(30.0, abs=0.5)
+    assert media.duration_ms == pytest.approx(result.timeline.duration_ms, abs=50)
 
-    expected_s = result.timeline.duration_ms / 1000.0
-    n_frames, decoded_s = imageio_ffmpeg.count_frames_and_secs(str(output_path))
-    # See the module docstring: a segment whose source seek point falls
-    # off the source's frame grid can render one frame short. Bounded,
-    # documented tolerance, not an exact match.
-    assert decoded_s == pytest.approx(expected_s, abs=0.5)
-    assert n_frames >= result.timeline.duration_frames - len(result.timeline.clips)
+
+def test_full_pipeline_no_systematic_frame_loss_end_to_end(project):
+    """The Step 8 follow-up regression test (item 7): with the candidate
+    frame-snapping fix in place, a real multi-clip render must reproduce
+    its declared duration exactly -- not within a tolerance that quietly
+    accepts one frame lost per misaligned clip, which is exactly the bug
+    this fix closes (see poc.decide.cutter._snap_ms_to_source_frame's
+    docstring, and the before/after measurements in the Step 8 follow-up
+    commit message).
+
+    Proves, on one real multi-clip render:
+        Timeline declared duration
+        == expected output frame count / fps
+        == rendered output duration
+    within normal container timestamp rounding (well under one frame),
+    with zero systematic frame loss -- not "close enough", exact.
+    """
+    output_path = project["out_dir"] / "regression.mp4"
+    result = run_pipeline(
+        project["footage_dir"], project["music_path"], "energetic", 10.0, output_path
+    )
+    tl = result.timeline
+    assert len(tl.clips) >= 5  # a real multi-clip render, not a degenerate single-clip case
+
+    expected_frames = tl.duration_frames
+    expected_seconds = expected_frames / tl.settings.fps
+
+    n_frames, decoded_seconds = imageio_ffmpeg.count_frames_and_secs(str(output_path))
+
+    assert n_frames == expected_frames, (
+        f"declared {expected_frames} frames but decoded {n_frames}: "
+        f"{expected_frames - n_frames} frame(s) lost across {len(tl.clips)} clips"
+    )
+    # Normal container/timestamp rounding tolerance: well under one frame
+    # (1/30s = 33.3ms), not the multi-frame slack the pre-fix code needed.
+    assert decoded_seconds == pytest.approx(expected_seconds, abs=0.02)
+
+    media = probe(output_path, FFMPEG_EXE)
+    assert media.duration_ms == pytest.approx(tl.duration_ms, abs=50)
 
 
 def _without_timestamp(tl: Timeline) -> dict:
