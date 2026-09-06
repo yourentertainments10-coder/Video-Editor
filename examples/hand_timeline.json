@@ -1,0 +1,32 @@
+{
+  "schema_version": "0.1",
+  "settings": {"fps": 30, "width": 1920, "height": 1080},
+  "duration_frames": 240,
+  "music": {"path": "music.mp3", "in_ms": 0, "gain_db": -1.0, "fade_out_ms": 1000},
+  "beats": [
+    {"frame": 0,   "downbeat": true,  "energy": 0.5},
+    {"frame": 15,  "downbeat": false, "energy": 0.5},
+    {"frame": 30,  "downbeat": false, "energy": 0.5},
+    {"frame": 45,  "downbeat": false, "energy": 0.5},
+    {"frame": 60,  "downbeat": true,  "energy": 0.6},
+    {"frame": 75,  "downbeat": false, "energy": 0.6},
+    {"frame": 90,  "downbeat": false, "energy": 0.6},
+    {"frame": 105, "downbeat": false, "energy": 0.6},
+    {"frame": 120, "downbeat": true,  "energy": 0.7},
+    {"frame": 135, "downbeat": false, "energy": 0.7},
+    {"frame": 150, "downbeat": false, "energy": 0.7},
+    {"frame": 165, "downbeat": false, "energy": 0.7},
+    {"frame": 180, "downbeat": true,  "energy": 0.8},
+    {"frame": 195, "downbeat": false, "energy": 0.8},
+    {"frame": 210, "downbeat": false, "energy": 0.8},
+    {"frame": 225, "downbeat": false, "energy": 0.8}
+  ],
+  "clips": [
+    {"id": "c001", "start_frame": 0,   "end_frame": 60,  "source": {"path": "footage/A.mp4", "in_ms": 2000}},
+    {"id": "c002", "start_frame": 60,  "end_frame": 120, "source": {"path": "footage/B.mp4", "in_ms": 500}},
+    {"id": "c003", "start_frame": 120, "end_frame": 180, "source": {"path": "footage/C.mp4", "in_ms": 4000}},
+    {"id": "c004", "start_frame": 180, "end_frame": 210, "source": {"path": "footage/A.mp4", "in_ms": 9000}},
+    {"id": "c005", "start_frame": 210, "end_frame": 240, "source": {"path": "footage/D.mp4", "in_ms": 1000}}
+  ],
+  "provenance": {"generator": "hand", "params": {}, "seed": null, "created_at": "2026-09-05T12:00:00+00:00"}
+}
