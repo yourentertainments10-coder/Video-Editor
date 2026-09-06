@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+build/
+dist/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Local sample inputs and generated outputs.
+# The MVP is run against a local project/ folder of real footage and music;
+# none of that raw or rendered media belongs in git.
+project/
+out/
+poc_cache/
