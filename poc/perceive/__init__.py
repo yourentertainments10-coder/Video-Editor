@@ -1,8 +1,6 @@
-"""poc.perceive: video and music analysis only -- no editing decisions.
+"""poc.perceive: video and music analysis only -- no editing decisions."""
 
-Step 5 adds ``music``. Step 6 will add ``footage`` alongside it.
-"""
-
+from poc.perceive.footage import FootageMap, FootageSample, analyze_footage
 from poc.perceive.music import (
     BeatEnergy,
     EnergyDiagnostics,
@@ -17,10 +15,13 @@ from poc.perceive.music import (
 __all__ = [
     "BeatEnergy",
     "EnergyDiagnostics",
+    "FootageMap",
+    "FootageSample",
     "LowEnergyRegion",
     "MusicMap",
     "OctaveAlternative",
     "OctaveDiagnostics",
     "WindowSummary",
+    "analyze_footage",
     "analyze_music",
 ]
