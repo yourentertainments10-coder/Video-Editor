@@ -204,6 +204,24 @@ permitted by Section 9, item 5):
 
 ## 11. Amendments log
 
-*(Empty at freeze time. Append dated entries here for any change made
-after real data collection begins. Sections 0-9 above are never edited
-in place once collection has started.)*
+### 2026-09-30: P0 evaluation tooling, before media collection
+
+- State at amendment: no evaluation footage or ratings collected.
+- The evaluation CLI now measures M1-M5, checks rating completeness and
+  duplicates, and prevents development/preliminary runs from issuing the
+  official MVP verdict. Official generation requires a clean evaluation
+  source/protocol tree.
+- M1 verifies generated timelines, source bounds and hashes, rendered
+  streams/duration, render-time limits, and missing expected artifacts.
+- Analysis caching and contact sheets were added outside the cutter's
+  scoring/selection logic. `poc.decide` and the frozen thresholds, dataset
+  size, rater count, and decision rules in Sections 2-9 are unchanged.
+- Every manifest/report records the source commit, source fingerprint,
+  analysis version/parameters, input hashes, and worktree state. The exact
+  clean source commit used for the first official dataset must be recorded
+  here before ratings begin; generate that dataset from that commit only.
+- Preliminary data is diagnostic and does not replace or count as the
+  official 5-set, 3-track, 30-pair evaluation.
+
+Sections 0-9 remain unchanged. Append a new dated entry for any later
+protocol amendment; never revise this record to fit observed results.

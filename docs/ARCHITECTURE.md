@@ -1,6 +1,18 @@
 # AI Video Editing Agent: System Architecture
 
-Version 0.1, 2026-09-05. Status: design, pre-implementation.
+Version 0.1, 2026-09-05. Status: aspirational target design; not a description of the implemented repository.
+
+> **2026-10-10 revision notice.** The product is now fully offline and
+> independent: no external AI APIs, no cloud services (`OFFLINE_POLICY.md`,
+> binding). Every mention below of hosted models (Claude, Haiku, GPT,
+> Gemini, NVIDIA NIM hosted, hosted VLMs or STT), LiteLLM, Clerk/Auth.js,
+> S3/R2/MinIO, or per-token costs is **superseded**. The Director and
+> Reviser roles are implemented by the rule-based `LOCAL_DIRECTOR.md`;
+> rendering details are in `RENDER_SPEC.md`; the verdicts in
+> `ARCHITECTURE_REVIEW.md` override the original technology choices
+> (madmom, InsightFace, SigLIP+LAION, TransNetV2-first, Next.js, Remotion).
+> Sections that are superseded carry a short marker. The original text is
+> kept for history.
 
 This document defines the product and the architecture for an autonomous, natural-language-driven video editing agent. It is written to be handed to engineers as the reference before any code is written. Sections follow the 21 questions in the original brief, preceded by a problem analysis that motivates every technology choice.
 
@@ -12,6 +24,7 @@ Ten decisions shape everything else. If you agree with these, the rest of the do
 
 | # | Decision | Why |
 |---|----------|-----|
+| 0 | **Fully offline and independent (added 2026-10-10).** No external AI API or cloud service at runtime; all intelligence is deterministic code, rule tables, or local model files run in-process. | Product requirement: privacy, zero running cost, works without internet. See `OFFLINE_POLICY.md`. Overrides decisions 8 and 10 where they name hosted providers. |
 | 1 | **LLMs never touch pixels or audio samples.** They reason over compact symbolic descriptions produced by deterministic perception, and emit structured edits. | Keeps token cost tiny, makes the reasoning model swappable, and keeps output verifiable. |
 | 2 | **The Timeline Document is the single source of truth.** Every generation and revision is an operation on a versioned JSON timeline. Video files are derived artifacts. | Enables "modify, don't regenerate", undo, diffing, partial re-rendering, and a future manual editor. |
 | 3 | **Three-layer architecture: Perceive, Decide, Execute**, connected only through typed data contracts. | Each layer scales, caches, and evolves independently. Layer 2 (models) is the only layer that will churn. |
@@ -136,7 +149,7 @@ Grouped by capability. "M" = MVP, "L" = later.
 
 ### 3.4 Creative brief understanding
 - FR-22 (M) Parse free-text brief into a structured Creative Brief (duration, aspect, mood, pacing curve, shot-scale preferences, transition policy, caption needs, must-include and must-exclude content, story arc).
-- FR-23 (M) Ask up to three clarifying questions when the brief is ambiguous on a high-impact axis; proceed with stated defaults otherwise.
+- FR-23 (M) Ask up to three clarifying questions when the brief is ambiguous on a high-impact axis; proceed with stated defaults otherwise. *(Superseded by review item 20: ask only when duration or aspect is missing; see `LOCAL_DIRECTOR.md` Section 3.)*
 - FR-24 (L) Style presets and reference videos ("edit like this").
 
 ### 3.5 Editing
@@ -263,10 +276,32 @@ flowchart TB
     Perceive --> OBJ
     Idx --> DB
     Doc --> DB
-    Gateway -.-> ExtLLM[External / local model providers]
+    Gateway -.-> ExtLLM[Local model files only - no external providers]
 ```
 
-### 5.2 Deployment view
+> **Superseded (2026-10-10):** the API gateway, auth, queues, Redis, object
+> storage, and Remotion boxes above describe a hosted service. The offline
+> product is: local UI (loopback only) → local Python API → one worker
+> process → local files/SQLite. The Decision layer's "Model Gateway" loads
+> only registered local models (`OFFLINE_POLICY.md` Section 4).
+
+### 5.2 Local project storage (current P2.3 slice)
+
+The current local project library stores a serializable `project.json` in
+the chosen project root. It contains the project ID, stable asset IDs,
+SHA-256 content hashes, media metadata, absolute current source paths, and
+the optional editor timeline. Original media remains external and is never
+modified or copied by import. Backups must include `project.json` and all
+referenced media; restoring elsewhere requires relinking each moved source.
+Relinking checks the original content hash and preserves the stable asset ID.
+This is a local-file manifest, not the future database/object-store design
+described below. Import supports video, image, audio, and music metadata;
+this does not imply the renderer supports those media kinds yet.
+
+### 5.3 Deployment view
+
+> **Superseded (2026-10-10):** hosted deployment is out of scope. The
+> current deployment is a single local machine; see `OFFLINE_POLICY.md`.
 
 - **Web app**: Next.js, served statically or via Node. Talks only to the API.
 - **API service**: stateless FastAPI containers behind a load balancer. Owns auth, project CRUD, job submission, timeline reads, event streaming.
@@ -395,6 +430,21 @@ Reply: plain-language diff + preview + "revert" affordance
 
 ### 8.1 Roles
 
+> **Superseded (2026-10-10).** Offline role assignment, which replaces the
+> table below:
+>
+> | Role | Offline implementation | Status |
+> |------|------------------------|--------|
+> | Director (brief → plan) | Rule-based Local Director + style lexicon (`LOCAL_DIRECTOR.md`); optional in-process llama.cpp model later | Design |
+> | Reviser (instruction → operations) | Same engine, revision intents | Design |
+> | Describer (VLM) | Deferred (review item 14); local model only if P7 justifies it | Not planned yet |
+> | Embedder | Deferred; local OpenCLIP ViT-L/14 file if semantic search is needed (review item 13) | Not planned yet |
+> | Detector (faces) | OpenCV YuNet ONNX, Apache 2.0 (review item 16) | First P1 iteration |
+> | Beat analyzer | librosa (implemented); allin1 (MIT) only if librosa fails the beat-flash check | Implemented |
+> | Structure analyzer | librosa novelty; allin1 optional | Deferred |
+> | Transcriber | whisper.cpp / faster-whisper with a local model file | P6 |
+> | Critic | Deferred (review item 22) | — |
+
 Each role is an interface. Concrete providers are chosen in a routing config, per environment, per tenant, or per request.
 
 | Role | Task | Frequency | Quality need | Default provider | Alternatives |
@@ -411,6 +461,10 @@ Each role is an interface. Concrete providers are chosen in a routing config, pe
 
 ### 8.2 Rules for using models
 
+> Rules 2, 3 and 4 still apply to the local engine. Rules 5 and 7 (provider
+> caching and vendor fallbacks) do not apply offline; "fallback" now means
+> falling back from an optional local model to the rule engine.
+
 1. **Structured output always.** Every LLM call returns JSON validated against a schema (Pydantic). Use the provider's native structured output where available (for Claude, `output_config.format`; strict tools where a tool call is more natural). Free text is only allowed inside designated fields such as `rationale`.
 2. **No pixels in the Director's context.** The Director sees the Footage Index summary and MusicMap summary, never frames, except in the optional Critic pass.
 3. **IDs, not descriptions, in outputs.** Models refer to shots, clips, sections, and markers by ID. The validator rejects unknown IDs. This kills the most common hallucination class.
@@ -424,6 +478,13 @@ Each role is an interface. Concrete providers are chosen in a routing config, pe
 ## 9. Video analysis pipeline
 
 Design principle: **cheap passes first, expensive passes on candidates only.** A 60-minute source may contain 600 shots; only a fraction will be hero candidates worth a VLM call.
+
+> **Review overrides:** primary segmentation is motion-curve windows, not
+> TransNetV2 (item 11); proxies are 720p, not 540p (item 17); faces use
+> YuNet, not SCRFD (item 16); shot scale for non-person footage needs CLIP
+> zero-shot (item 12); the LAION aesthetic head requires OpenCLIP
+> ViT-L/14, not SigLIP (item 13); VLM and RT-DETR are deferred (items 14,
+> 15). Hosted VLM options in stage 7 are removed by `OFFLINE_POLICY.md`.
 
 ### 9.1 Stages
 
@@ -487,6 +548,10 @@ The Director plans against this summary. The Cutter then queries the full index 
 
 ### 10.1 Music track
 
+> **Review override (item 7):** madmom is replaced (unmaintained; models are
+> non-commercial). v0 uses librosa beats and per-beat energy only, with no
+> assumed downbeats (`MVP.md` Section 7).
+
 | Stage | Method | Output |
 |-------|--------|--------|
 | Decode and normalize | ffmpeg to 44.1 kHz mono float; loudness measurement (EBU R128) | Normalized audio, integrated loudness |
@@ -509,6 +574,13 @@ Under 800 tokens: BPM, duration, sections with labels and energy, ranked drops, 
 ---
 
 ## 11. AI editing agent workflow
+
+> **2026-10-10:** in the offline product every "Director" / "Reviser" step
+> below is performed by the rule-based `LOCAL_DIRECTOR.md`. Steps 1 and 3
+> are merged into one call (review item 21), clarifying questions are
+> limited to missing duration or aspect (item 20), and Step 6 self-critique
+> is deferred (item 22). The beam search in Step 4 starts as greedy with
+> one-step lookahead (item 4).
 
 The agent is a **workflow with LLM steps**, not an open-ended autonomous loop. Every step has a typed input, a typed output, and a validator. This is deliberate: it makes cost bounded, behavior debuggable, and quality measurable per step.
 
@@ -606,7 +678,70 @@ A free agent that browses the footage index, tries cuts, renders, and looks at r
 - Diffable and versioned.
 - Convertible to OpenTimelineIO for export (the schema is designed to map cleanly).
 
-### 12.2 Schema (abbreviated, v1)
+### 12.2 Schema (abbreviated, v1 target)
+
+The repository's P2.1 `EditorTimeline` is a data-only first slice of this
+target: stable project/timeline, asset, layer, track, and clip IDs; a rational
+frame-rate plus integer tick time base; video/image/audio/music/text assets;
+source and timeline ranges; transforms; audio settings; and typed allowlisted
+transition/effect/animation references. It intentionally does not yet model
+sections, speed ramps, arbitrary effect parameters, rendering, or operation
+history. The legacy MVP `Timeline` v0.1 remains unchanged and is still the
+contract consumed by the cutter, evaluator, and renderer. Explicit migration
+is provided for data conversion; renderer support is deferred to P2.6.
+
+#### 12.2.1 Schema upgrade policy (P2.2)
+
+- Supported source versions are legacy `0.1` and editor `1.0`; current version
+  is `1.0`.
+- Call `poc.timeline.migrate_timeline` to dispatch by `schema_version`.
+  `0.1` is parsed with the strict legacy model and converted through the
+  existing `migrate_legacy_timeline` behavior. `1.0` is validated and
+  canonicalized into a fresh `EditorTimeline` without changing its data.
+- Missing, malformed, unsupported older, and unsupported future versions
+  fail with `TimelineMigrationError`. A newer document is never downgraded.
+- Add future upgrades as explicit source-version-to-current migration steps.
+  Keep existing converters immutable; do not guess a path through unknown
+  intermediate versions. No downgrade path is defined.
+- When omitted, migrated project/timeline IDs are deterministic from the
+  complete v0.1 document. Asset IDs are deterministic from media kind and
+  normalized URI; existing clip IDs and other promised clip data are retained.
+
+This is deliberately a two-version dispatcher, not a general migration
+framework. Persistence/version-history policy will be expanded only with a
+later schema that needs it.
+
+#### 12.2.2 Effect catalogue contract (P2.4)
+
+P2.4 declares an ordered, typed effect catalogue in `poc.timeline.schema`.
+Each `EffectRef` has an allowlisted `effect_id` and effect-specific strict
+Pydantic parameters. Catalogue metadata publishes a human-readable name,
+parameter schema/defaults/ranges, deterministic behavior contract, and a
+`renderable` flag. The identifiers are `fade_in`, `fade_out`, `zoom_in`,
+`zoom_out`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `brightness`,
+`contrast`, `saturation`, and `blur`.
+
+All twelve are declared but currently `renderable: false`; P2.4 validates
+and serializes effect intent only. The catalogue is independent of the
+renderer. Unknown IDs, extra parameters, and command/filter strings are
+rejected. Future renderers must implement effects explicitly and
+deterministically; this schema is never an arbitrary FFmpeg input channel.
+
+#### 12.2.3 Transition catalogue contract (P2.5)
+
+Transitions are separate from per-clip effects. A `TransitionRef` is attached
+to the incoming clip and describes the boundary immediately before it; the
+source in/out ranges remain properties of the clips and are not rewritten.
+The ordered allowlist is `cut`, `fade`, `dissolve`, `dip_to_black`,
+`dip_to_white`, `wipe_left`, `wipe_right`, `wipe_up`, and `wipe_down`.
+
+Transition IDs have effect-independent typed parameter models and catalogue
+metadata. Dissolves require a fixed `mask_seed`; other parameters are typed,
+bounded, and defaulted. `cut` has zero duration; other transitions have a
+positive tick duration. Validation requires an adjacent preceding clip on
+the same track and caps duration at 60% of the shorter adjacent clip. All
+entries currently report `renderable: false`. No FFmpeg/filter strings are
+accepted; rendering is deferred to P2.6.
 
 ```json
 {
@@ -651,7 +786,7 @@ Notes on the schema:
 - `speed.kind` is `constant` or `ramp` with keyframes `[{src_ms, rate}]`. Ramps are rendered by FFmpeg `setpts` with piecewise expressions or by frame-map generation for precision.
 - `transition_in` is `{type, duration_ms, params}`; the transition consumes time from both adjacent clips symmetrically, and the validator ensures each clip is long enough.
 - `locked: true` on a clip tells the Cutter and Reviser not to change it unless explicitly asked. Set automatically when a user praises or manually edits a clip.
-- Everything is milliseconds in the timeline; the compiler converts to frames using `settings.fps` and rounds consistently.
+- ~~Everything is milliseconds in the timeline.~~ Corrected per review item 2 and P2.1: timeline positions are integer ticks on a rational frame-rate time base (v0.1 uses integer frames at 30 fps). Milliseconds are for display only. The example above keeps `_ms` field names for readability; the implemented `EditorTimeline` v1.0 is authoritative.
 
 ### 12.3 Versioning model: operations plus snapshots
 
@@ -700,6 +835,12 @@ Each operation has a scope, and the applier records the set of affected timeline
 ## 13. Rendering architecture
 
 ### 13.1 Principles
+
+> **Review overrides (items 6, 10, 17):** assemble hard cuts with the
+> concat demuxer and pre-render transitions as short two-clip segments
+> instead of one large `xfade` graph; defer Remotion (licence) and use
+> libass for text; previews from 720p proxies. The detailed, current render
+> contract is `RENDER_SPEC.md`.
 
 - **Two tiers.** Preview: 540p from proxies, `ultrafast` preset, CRF 28, 30 fps. Final: source resolution from originals, `slow` preset or hardware encoder, correct color space handling (BT.709 versus HLG or Log sources tone-mapped).
 - **Segment-level caching.** Each clip compiles to a `SegmentSpec` (source, in/out, speed, transform, grade, output profile). Its SHA-256 is the cache key. Unchanged clips across versions are never re-rendered.
@@ -764,6 +905,12 @@ Each effect is a plugin: a JSON schema for parameters plus a compile function th
 
 ### 14.1 The pipeline in detail
 
+> **Superseded implementation (2026-10-10):** the steps below remain the
+> right *pipeline*, but "Reviser model" and "Director" are now the offline
+> rule engine in `LOCAL_DIRECTOR.md`. Content references ("the shot of the
+> dog") are unsupported until local semantic search exists (P7); the engine
+> answers with candidates or says it cannot resolve the reference.
+
 1. **Context assembly.** Current timeline (compact rendering: sections, clips with IDs, start/end, scale, caption, speed, transitions; about 1.5k to 4k tokens for a 60 s edit), markers, conversation summary, UI selection (if the user clicked a clip or scrubbed to a time), and the brief.
 
 2. **Intent classification (Reviser model, tiny prompt).** Classes:
@@ -802,6 +949,11 @@ Each effect is a plugin: a JSON schema for parameters plus a compile function th
 ## 15. Database design (high level)
 
 Postgres with JSONB for documents and pgvector for embeddings. Media never in the DB.
+
+> **Offline note:** for the local product, the same tables map onto SQLite
+> (or the existing `project.json` manifest) on the user's disk. `users`,
+> `workspaces`, and `model_calls` cost columns are unnecessary; keep a
+> local `model_runs` log (model id, file hash, duration) instead.
 
 ```
 users(id, email, created_at)
@@ -846,8 +998,8 @@ Retention: originals and finals kept per plan; proxies and segment cache are evi
 REST for commands and reads, SSE (or WebSocket) for progress and chat streaming. All long operations return a `job_id` immediately.
 
 ```
-Auth
-  POST   /auth/...                                  (delegated to an auth provider)
+Auth   (offline product: none; API binds to 127.0.0.1 only)
+  POST   /auth/...                                  (hosted variant only; superseded)
 
 Projects
   POST   /projects                                  create
@@ -896,6 +1048,30 @@ Internal service boundaries (in-process modules at first, separable later): `per
 ## 17. Recommended technology stack
 
 Chosen for: maturity, Python-first ML ecosystem, replaceability, ability to run on one machine and on a cluster.
+
+> **Current offline stack (2026-10-10), replacing the table below:**
+>
+> | Layer | Choice | Status |
+> |-------|--------|--------|
+> | Backend | Python 3.11+, Pydantic v2 | Implemented |
+> | Local API (P3) | FastAPI bound to 127.0.0.1 | Planned |
+> | Jobs | One in-process worker; SQLite job table | Planned |
+> | Storage | Local files behind a `Storage` interface; `project.json` (P2.3) / SQLite | Implemented (manifest) |
+> | Media | FFmpeg via `imageio-ffmpeg` (bundled) | Implemented |
+> | Music | librosa; allin1 (MIT) only if needed | Implemented (librosa) |
+> | Video metrics | OpenCV (motion, sharpness, exposure); PySceneDetect for true cuts | Implemented (metrics) |
+> | Faces | OpenCV YuNet (Apache 2.0) | Planned (P1 iteration) |
+> | Embeddings / aesthetics | OpenCLIP ViT-L/14 local file, only if P7 justifies | Deferred |
+> | Director / Reviser | Rule-based Local Director; optional llama.cpp GGUF in-process | Designed |
+> | STT / TTS | whisper.cpp or faster-whisper; Piper | P6 |
+> | Text rendering | libass with OFL fonts | Planned (RENDER_SPEC) |
+> | Frontend | React + TypeScript + Vite SPA, progressive MP4 with faststart | P3 |
+> | Auth | None (single local user) | — |
+> | Export | OpenTimelineIO (local library) | Later |
+>
+> Removed: Anthropic/OpenAI/Gemini/NIM hosted models, LiteLLM, Clerk/Auth.js,
+> S3/R2/MinIO, Redis, Temporal, Kubernetes, Remotion (licence), madmom,
+> InsightFace, Ultralytics.
 
 | Layer | Choice | Alternatives considered | Why this one |
 |-------|--------|------------------------|--------------|
@@ -1005,6 +1181,13 @@ Continuous throughout: an **evaluation harness** with fixed footage sets, music,
 
 Assumptions: 60 s output, 30 min of raw 1080p footage per project, one music track, five revision turns. Cloud list prices as of 2026; treat as order-of-magnitude.
 
+> **Superseded for the offline product (2026-10-10).** Marginal cost per
+> project is zero in money; the budget is local time. Targets on a mid-range
+> laptop CPU: first analysis of 5 min of 1080p footage in 60–90 s (cached
+> afterwards), cutter under 1 s, 20 s render in 20–40 s (`MVP.md` §4),
+> revision preview under 15 s once partial re-render exists. The tables
+> below apply only if a hosted product is chosen later.
+
 ### 21.1 Per-project marginal cost
 
 | Item | Driver | Estimate |
@@ -1085,18 +1268,23 @@ class Renderer(Protocol):
     def render(self, graph: RenderGraph, profile: RenderProfile, cache: SegmentCache) -> RenderResult: ...
 ```
 
-Routing config (per environment):
+Routing config (offline, replaces the original hosted-provider config):
 
 ```yaml
 roles:
-  director:  {provider: anthropic, model: claude-opus-5, effort: high, fallback: [openai:gpt-5]}
-  reviser:   {provider: anthropic, model: claude-haiku-4-5, fallback: [nvidia_nim:qwen3-32b]}
-  describer: {provider: local_vllm, model: qwen2.5-vl-7b, fallback: [anthropic:claude-haiku-4-5]}
-  embedder:  {provider: local, model: siglip2-so400m}
-  beats:     {provider: madmom}
-  structure: {provider: allin1, fallback: [librosa_novelty]}
+  director:  {provider: rules, lexicon: director/style_lexicon.yaml}
+  reviser:   {provider: rules, intents: director/intents.yaml}
+  # optional, off by default; must be listed in models/registry.json
+  # director_llm: {provider: llama_cpp, model_id: <registered-gguf-id>, fallback: [rules]}
+  faces:     {provider: opencv_yunet, model_id: yunet-2023mar}
+  beats:     {provider: librosa}
+  structure: {provider: librosa_novelty}
   renderer:  {provider: ffmpeg_local}
+network:     {allow: [loopback]}
 ```
+
+The original config named `anthropic`, `openai`, and `nvidia_nim`
+providers; those are removed by `OFFLINE_POLICY.md`.
 
 ## Appendix B: Glossary
 

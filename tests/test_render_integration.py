@@ -15,9 +15,10 @@ import subprocess
 from pathlib import Path
 
 import imageio_ffmpeg
+import cv2
 import pytest
 
-from poc.execute import probe, render, render_from_file
+from poc.execute import generate_contact_sheet, probe, render, render_from_file
 from poc.timeline import Clip, Music, Settings, Source, Timeline
 
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
@@ -139,6 +140,16 @@ def test_render_minimal_timeline_end_to_end(minimal_project: tuple[Timeline, Pat
 
     n_frames, _ = imageio_ffmpeg.count_frames_and_secs(str(out_path))
     assert n_frames == 60
+
+
+def test_contact_sheet_samples_each_clip(minimal_project: tuple[Timeline, Path]):
+    tl, base_dir = minimal_project
+    output_path = generate_contact_sheet(tl, base_dir, base_dir / "contact_sheet.png", columns=1)
+    image = cv2.imread(str(output_path))
+    assert image is not None
+    assert image.shape[0] > 2 * 180
+    assert image.shape[1] > 320
+    assert image.std() > 0
 
 
 def test_render_creates_missing_output_directory(minimal_project: tuple[Timeline, Path]):

@@ -27,7 +27,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from poc.timeline.schema import Beat, Clip, Timeline
+from poc.timeline.schema import Beat, Clip, EditorTimeline, Timeline
 
 MIN_CLIP_FRAMES = 6  # 200 ms at 30 fps
 ON_BEAT_TOLERANCE_FRAMES = 1
@@ -40,6 +40,16 @@ ViolationCode = Literal[
     "NO_SOURCE_REUSE",
     "UNIQUE_IDS",
     "MUSIC_RANGE",
+    "DUPLICATE_ID",
+    "UNKNOWN_LAYER",
+    "UNKNOWN_TRACK",
+    "UNKNOWN_ASSET",
+    "ASSET_KIND",
+    "TIMELINE_RANGE",
+    "SOURCE_REQUIRED",
+    "TRANSITION_RANGE",
+    "TRANSITION_BOUNDARY",
+    "MUSIC_REFERENCE",
 ]
 
 
@@ -80,6 +90,180 @@ def validate(
     v.extend(_check_music_range(tl, music_duration_ms))
 
     return v
+
+
+def validate_editor_timeline(timeline: EditorTimeline) -> list[Violation]:
+    """Validate v2 editor references and bounds without rendering semantics.
+
+    Multiple tracks may overlap by design. This validator therefore checks
+    stable identities, references, asset/source compatibility, and timeline
+    bounds, but does not impose the legacy single-track contiguity rule.
+    """
+    violations: list[Violation] = []
+    entities = [
+        (asset.asset_id, "asset", None) for asset in timeline.assets
+    ] + [
+        (layer.layer_id, "layer", None) for layer in timeline.layers
+    ] + [
+        (track.track_id, "track", None) for track in timeline.tracks
+    ] + [
+        (clip.clip_id, "clip", clip.clip_id) for clip in timeline.clips
+    ] + [
+        (marker.marker_id, "marker", None) for marker in timeline.markers
+    ]
+    counts = Counter(entity_id for entity_id, _, _ in entities)
+    for entity_id, entity_type, clip_id in entities:
+        if counts[entity_id] > 1 and not any(
+            violation.code == "DUPLICATE_ID" and violation.detail.startswith(f"duplicate id {entity_id!r}")
+            for violation in violations
+        ):
+            violations.append(Violation(
+                code="DUPLICATE_ID",
+                clip_id=clip_id,
+                detail=f"duplicate id {entity_id!r} across timeline entities (including {entity_type})",
+            ))
+
+    layers_by_id = {layer.layer_id: layer for layer in timeline.layers}
+    tracks_by_id = {track.track_id: track for track in timeline.tracks}
+    assets_by_id = {asset.asset_id: asset for asset in timeline.assets}
+
+    for track in timeline.tracks:
+        if track.layer_id not in layers_by_id:
+            violations.append(Violation(
+                code="UNKNOWN_LAYER",
+                detail=f"track {track.track_id!r} references missing layer {track.layer_id!r}",
+            ))
+
+    if (timeline.music_asset_id is None) != (timeline.music_track_id is None):
+        violations.append(Violation(
+            code="MUSIC_REFERENCE", detail="music_asset_id and music_track_id must be set together"
+        ))
+    if timeline.music_asset_id is not None:
+        music_asset = assets_by_id.get(timeline.music_asset_id)
+        music_track = tracks_by_id.get(timeline.music_track_id or "")
+        if music_asset is None or music_asset.kind not in {"music", "audio"}:
+            violations.append(Violation(
+                code="MUSIC_REFERENCE",
+                detail=f"music asset {timeline.music_asset_id!r} is missing or is not audio/music",
+            ))
+        if music_track is None or music_track.kind != "music":
+            violations.append(Violation(
+                code="MUSIC_REFERENCE",
+                detail=f"music track {timeline.music_track_id!r} is missing or is not a music track",
+            ))
+
+    allowed_asset_kinds = {
+        "video": {"video"},
+        "overlay": {"video", "image", "text"},
+        "audio": {"audio"},
+        "music": {"audio", "music"},
+    }
+    source_kinds = {"video", "audio", "music"}
+    clips_by_track: dict[str, list] = {}
+    for item in timeline.clips:
+        clips_by_track.setdefault(item.track_id, []).append(item)
+    for track_clips in clips_by_track.values():
+        track_clips.sort(key=lambda item: (item.start_tick, item.clip_id))
+
+    for clip in timeline.clips:
+        if clip.start_tick + clip.duration_ticks > timeline.duration_ticks:
+            violations.append(Violation(
+                code="TIMELINE_RANGE",
+                clip_id=clip.clip_id,
+                detail=(
+                    f"clip ends at tick {clip.start_tick + clip.duration_ticks}, "
+                    f"after timeline duration {timeline.duration_ticks}"
+                ),
+            ))
+
+        track = tracks_by_id.get(clip.track_id)
+        asset = assets_by_id.get(clip.asset_id)
+        if track is None:
+            violations.append(Violation(
+                code="UNKNOWN_TRACK",
+                clip_id=clip.clip_id,
+                detail=f"clip references missing track {clip.track_id!r}",
+            ))
+        if asset is None:
+            violations.append(Violation(
+                code="UNKNOWN_ASSET",
+                clip_id=clip.clip_id,
+                detail=f"clip references missing asset {clip.asset_id!r}",
+            ))
+        if track is not None and asset is not None:
+            if asset.kind not in allowed_asset_kinds[track.kind]:
+                violations.append(Violation(
+                    code="ASSET_KIND",
+                    clip_id=clip.clip_id,
+                    detail=f"asset kind {asset.kind!r} is not valid on {track.kind!r} track",
+                ))
+            if asset.kind in source_kinds:
+                if clip.source_in_ms is None or clip.source_out_ms is None:
+                    violations.append(Violation(
+                        code="SOURCE_REQUIRED",
+                        clip_id=clip.clip_id,
+                        detail=f"{asset.kind} clips require source_in_ms and source_out_ms",
+                    ))
+                elif clip.source_out_ms <= clip.source_in_ms:
+                    violations.append(Violation(
+                        code="SOURCE_RANGE",
+                        clip_id=clip.clip_id,
+                        detail="source_out_ms must be greater than source_in_ms",
+                    ))
+                elif asset.duration_ms is not None and clip.source_out_ms > asset.duration_ms:
+                    violations.append(Violation(
+                        code="SOURCE_RANGE",
+                        clip_id=clip.clip_id,
+                        detail=(
+                            f"source out {clip.source_out_ms} ms > asset duration "
+                            f"{asset.duration_ms} ms"
+                        ),
+                    ))
+            elif clip.source_in_ms is not None or clip.source_out_ms is not None:
+                violations.append(Violation(
+                    code="SOURCE_RANGE",
+                    clip_id=clip.clip_id,
+                    detail=f"{asset.kind} clips do not use a source time range",
+                ))
+
+        if clip.transition is not None:
+            preceding = [
+                previous for previous in clips_by_track.get(clip.track_id, [])
+                if previous.clip_id != clip.clip_id
+                and previous.start_tick + previous.duration_ticks == clip.start_tick
+            ]
+            if not preceding:
+                violations.append(Violation(
+                    code="TRANSITION_BOUNDARY",
+                    clip_id=clip.clip_id,
+                    detail="incoming transition requires an adjacent preceding clip on the same track",
+                ))
+                continue
+            if clip.transition.transition_id == "cut":
+                continue
+            previous = max(preceding, key=lambda item: (item.start_tick, item.clip_id))
+            maximum_duration = int(0.6 * min(previous.duration_ticks, clip.duration_ticks))
+            if clip.transition.duration_ticks > maximum_duration:
+                violations.append(Violation(
+                    code="TRANSITION_RANGE",
+                    clip_id=clip.clip_id,
+                    detail=(
+                        f"transition duration {clip.transition.duration_ticks} ticks exceeds 60% "
+                        f"of the shorter adjacent clip ({maximum_duration} ticks)"
+                    ),
+                ))
+
+    for marker in timeline.markers:
+        if marker.position_tick > timeline.duration_ticks:
+            violations.append(Violation(
+                code="TIMELINE_RANGE",
+                detail=(
+                    f"marker {marker.marker_id!r} is at tick {marker.position_tick}, "
+                    f"after timeline duration {timeline.duration_ticks}"
+                ),
+            ))
+
+    return violations
 
 
 def _check_unique_ids(clips: list[Clip]) -> list[Violation]:

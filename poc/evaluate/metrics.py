@@ -23,6 +23,7 @@ never touches poc.decide/poc.execute/poc.perceive.
 from __future__ import annotations
 
 import math
+import hashlib
 from collections import defaultdict
 from pathlib import Path
 from typing import Literal
@@ -32,6 +33,7 @@ from pydantic import BaseModel, ConfigDict
 from poc.evaluate.blind import AnswerKey
 from poc.evaluate.manifest import PairManifest
 from poc.evaluate.ratings import MoodIdentificationRating, OutputRating, PairwiseRating
+from poc.execute.render import probe, resolve_media_path
 from poc.timeline.schema import Timeline
 from poc.timeline.validate import validate
 
@@ -100,38 +102,137 @@ class M1Result(BaseModel):
         return self.total_outputs > 0 and self.passing_outputs == self.total_outputs
 
 
-def compute_m1(manifests: list[PairManifest]) -> M1Result:
-    """Re-checks, from the artifacts a generation run actually produced,
-    that every output validates cleanly, has no ON_BEAT violation, and
-    rendered within the wall-time budget. cut()/cut_baseline() already
-    validate internally and raise on failure (Step 7), and render()
-    re-validates independently (Step 4) -- so a manifest existing at all
-    already implies validation and render succeeded; this function is the
-    explicit, direct re-check MVP.md's M1 asks for, not a re-statement of
-    that assumption.
-    """
+def compute_m1(
+    manifests: list[PairManifest],
+    expected_pair_ids: set[str] | None = None,
+    *,
+    ffmpeg_exe: str | None = None,
+) -> M1Result:
+    """Verify each expected timeline and rendered artifact, including
+    source/media bounds and the actual output's streams and duration."""
+    import imageio_ffmpeg
+
+    ffmpeg_exe = ffmpeg_exe or imageio_ffmpeg.get_ffmpeg_exe()
     failures: list[str] = []
-    total = 0
     passing = 0
-    for m in manifests:
-        for label, timeline_path, render_seconds in (
-            ("cutter", m.cutter_timeline_path, m.cutter_render_seconds),
-            ("baseline", m.baseline_timeline_path, m.baseline_render_seconds),
-        ):
-            total += 1
-            ok = True
-            tl = Timeline.load(timeline_path)
-            violations = validate(tl)
-            if violations:
-                failures.append(f"{m.pair_id}/{label}: {'; '.join(str(v) for v in violations)}")
+    manifest_by_id = {manifest.pair_id: manifest for manifest in manifests}
+    pair_ids = expected_pair_ids if expected_pair_ids is not None else set(manifest_by_id)
+    probe_cache = {}
+
+    def media_probe(path: Path):
+        resolved = path.resolve()
+        if resolved not in probe_cache:
+            probe_cache[resolved] = probe(resolved, ffmpeg_exe)
+        return probe_cache[resolved]
+
+    def file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with open(path, "rb") as file:
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def check_artifact(
+        manifest: PairManifest, label: str, timeline_path: str, render_path: str, render_seconds: float
+    ) -> bool:
+        ok = True
+        timeline_file = Path(timeline_path)
+        video_file = Path(render_path)
+        if not timeline_file.is_file():
+            failures.append(f"{manifest.pair_id}/{label}: timeline artifact is missing: {timeline_file}")
+            return False
+        if not video_file.is_file() or video_file.stat().st_size == 0:
+            failures.append(f"{manifest.pair_id}/{label}: rendered video is missing or empty: {video_file}")
+            return False
+        try:
+            timeline = Timeline.load(timeline_file)
+        except Exception as error:
+            failures.append(f"{manifest.pair_id}/{label}: timeline could not be loaded: {error}")
+            return False
+
+        if not timeline.beats:
+            failures.append(f"{manifest.pair_id}/{label}: timeline has no beat markers to verify alignment")
+            ok = False
+        if not manifest.media_base_dir:
+            failures.append(f"{manifest.pair_id}/{label}: manifest has no media base directory")
+            ok = False
+            violations = validate(timeline)
+        else:
+            try:
+                media_base = Path(manifest.media_base_dir)
+                for relative_path, expected_hash in manifest.input_sha256.items():
+                    source_file = resolve_media_path(relative_path, media_base)
+                    actual_hash = file_sha256(source_file)
+                    if actual_hash != expected_hash:
+                        failures.append(
+                            f"{manifest.pair_id}/{label}: source changed since generation: {relative_path}"
+                        )
+                        ok = False
+                source_durations = {}
+                for source in {clip.source.path for clip in timeline.clips}:
+                    source_file = resolve_media_path(source, media_base)
+                    source_info = media_probe(source_file)
+                    if not source_info.has_video:
+                        raise ValueError(f"source has no video stream: {source_file}")
+                    source_durations[source] = source_info.duration_ms
+                music_file = resolve_media_path(timeline.music.path, media_base)
+                music_info = media_probe(music_file)
+                if not music_info.has_audio:
+                    raise ValueError(f"music has no audio stream: {music_file}")
+                violations = validate(
+                    timeline,
+                    source_durations_ms=source_durations,
+                    music_duration_ms=music_info.duration_ms,
+                )
+            except Exception as error:
+                failures.append(f"{manifest.pair_id}/{label}: source/media verification failed: {error}")
                 ok = False
-            if render_seconds > M1_WALL_TIME_FIRST_RUN_S:
+                violations = validate(timeline)
+        if violations:
+            failures.append(f"{manifest.pair_id}/{label}: {'; '.join(str(v) for v in violations)}")
+            ok = False
+
+        try:
+            rendered = media_probe(video_file)
+            if not rendered.has_video or not rendered.has_audio:
+                failures.append(f"{manifest.pair_id}/{label}: render is missing an audio or video stream")
+                ok = False
+            tolerance_ms = max(1, round(1000 / timeline.settings.fps))
+            if abs(rendered.duration_ms - timeline.duration_ms) > tolerance_ms:
                 failures.append(
-                    f"{m.pair_id}/{label}: render took {render_seconds:.1f}s "
-                    f"> {M1_WALL_TIME_FIRST_RUN_S:.0f}s budget"
+                    f"{manifest.pair_id}/{label}: render duration {rendered.duration_ms} ms "
+                    f"does not match timeline {timeline.duration_ms} ms within one frame"
                 )
                 ok = False
-            if ok:
+        except Exception as error:
+            failures.append(f"{manifest.pair_id}/{label}: render is not playable: {error}")
+            ok = False
+
+        if render_seconds > M1_WALL_TIME_FIRST_RUN_S:
+            failures.append(
+                f"{manifest.pair_id}/{label}: render took {render_seconds:.1f}s "
+                f"> {M1_WALL_TIME_FIRST_RUN_S:.0f}s budget"
+            )
+            ok = False
+        return ok
+
+    total = 0
+    for pair_id in sorted(pair_ids):
+        manifest = manifest_by_id.get(pair_id)
+        if manifest is None:
+            total += 2
+            failures.extend((
+                f"{pair_id}/cutter: expected pair manifest is missing",
+                f"{pair_id}/baseline: expected pair manifest is missing",
+            ))
+            continue
+        artifacts = (
+            ("cutter", manifest.cutter_timeline_path, manifest.cutter_video_path, manifest.cutter_render_seconds),
+            ("baseline", manifest.baseline_timeline_path, manifest.baseline_video_path, manifest.baseline_render_seconds),
+        )
+        for label, timeline_path, render_path, render_seconds in artifacts:
+            total += 1
+            if check_artifact(manifest, label, timeline_path, render_path, render_seconds):
                 passing += 1
     return M1Result(total_outputs=total, passing_outputs=passing, failures=failures)
 
@@ -225,6 +326,8 @@ class M4Result(BaseModel):
     total_outputs: int
     passing_outputs: int
     yes_count_by_output: dict[str, int]
+    rated_outputs: int
+    total_responses: int
 
     @property
     def passing_fraction(self) -> float:
@@ -235,16 +338,26 @@ class M4Result(BaseModel):
         return self.total_outputs > 0 and self.passing_fraction >= M4_MIN_OUTPUT_FRACTION
 
 
-def compute_m4(ratings: list[OutputRating]) -> M4Result:
+def compute_m4(
+    ratings: list[OutputRating], expected_output_ids: set[str] | None = None
+) -> M4Result:
     by_output: dict[str, list[OutputRating]] = defaultdict(list)
+    for output_id in expected_output_ids or set():
+        by_output[output_id] = []
     for r in ratings:
-        if r.would_post is not None:
+        if r.would_post is not None and (
+            expected_output_ids is None or r.output_id in expected_output_ids
+        ):
             by_output[r.output_id].append(r)
 
     yes_count_by_output = {oid: sum(1 for r in rs if r.would_post) for oid, rs in by_output.items()}
     passing = sum(1 for count in yes_count_by_output.values() if count >= M4_MIN_RATERS_YES)
     return M4Result(
-        total_outputs=len(by_output), passing_outputs=passing, yes_count_by_output=yes_count_by_output
+        total_outputs=len(by_output),
+        passing_outputs=passing,
+        yes_count_by_output=yes_count_by_output,
+        rated_outputs=sum(bool(rs) for rs in by_output.values()),
+        total_responses=sum(len(rs) for rs in by_output.values()),
     )
 
 
@@ -284,16 +397,20 @@ def decide(
     *,
     iterated_with_faces: bool = False,
 ) -> str:
-    """Reproduces docs/MVP.md Section 10's three-way decision rule. Only
-    the metrics actually supplied are checked; a metric passed as None is
-    treated as "not yet measured", not as a pass or a fail.
-    """
+    """Apply the frozen decision rule only after every required metric is measured."""
+    missing = [
+        name for name, result in (("M3", m3), ("M4", m4), ("M5", m5))
+        if result is None
+    ]
+    if missing:
+        return f"INCOMPLETE: required metrics not measured: {', '.join(missing)}. No final verdict issued."
+
     all_measured_pass = (
         m1.passed
         and m2.passed
-        and (m3 is None or m3.passed)
-        and (m4 is None or m4.passed)
-        and (m5 is None or m5.passed)
+        and m3.passed
+        and m4.passed
+        and m5.passed
     )
     if all_measured_pass:
         return (

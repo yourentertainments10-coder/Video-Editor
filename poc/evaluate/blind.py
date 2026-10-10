@@ -22,7 +22,13 @@ from typing import Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-__all__ = ["BlindAssignment", "AnswerKey", "assign_blind_labels"]
+__all__ = [
+    "BlindAssignment",
+    "AnswerKey",
+    "MoodBlindAssignment",
+    "MoodAnswerKey",
+    "assign_blind_labels",
+]
 
 
 class BlindAssignment(BaseModel):
@@ -51,6 +57,36 @@ class AnswerKey(BaseModel):
 
     @classmethod
     def load(cls, path: str | Path) -> "AnswerKey":
+        return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+    def save(self, path: str | Path) -> None:
+        Path(path).write_text(self.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+
+class MoodBlindAssignment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mood_pair_id: str
+    a_is_energetic: bool
+
+
+class MoodAnswerKey(BaseModel):
+    """Private M3 A/B mapping, kept outside the rater-facing dataset."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seed: int
+    assignments: dict[str, MoodBlindAssignment]
+
+    @property
+    def energetic_side(self) -> dict[str, Literal["A", "B"]]:
+        return {
+            mood_pair_id: "A" if assignment.a_is_energetic else "B"
+            for mood_pair_id, assignment in self.assignments.items()
+        }
+
+    @classmethod
+    def load(cls, path: str | Path) -> "MoodAnswerKey":
         return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
 
     def save(self, path: str | Path) -> None:

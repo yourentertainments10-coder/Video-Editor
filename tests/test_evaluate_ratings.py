@@ -9,11 +9,18 @@ import pytest
 from pydantic import ValidationError
 
 from poc.evaluate.ratings import (
+    MoodIdentificationRating,
     OutputRating,
     PairwiseRating,
     append_ratings_jsonl,
+    load_mood_identification_ratings_csv,
+    load_mood_identification_ratings_jsonl,
+    load_output_ratings_csv,
+    load_output_ratings_jsonl,
     load_pairwise_ratings_csv,
     load_ratings_jsonl,
+    validate_mood_identification_ratings,
+    validate_output_ratings,
     validate_pairwise_ratings,
 )
 
@@ -155,3 +162,71 @@ def test_output_rating_rejects_out_of_range_in_time_rating():
         OutputRating(output_id="o1", rater_id="alice", in_time_rating=6, timestamp="2026-01-01T00:00:00Z")
     with pytest.raises(ValidationError):
         OutputRating(output_id="o1", rater_id="alice", in_time_rating=0, timestamp="2026-01-01T00:00:00Z")
+
+
+def test_load_mood_identification_csv_normalizes_video_label(tmp_path):
+    path = tmp_path / "m3.csv"
+    path.write_text(
+        "mood_pair_id,rater_id,guessed_energetic,timestamp\n"
+        "mood001,alice,b,2026-01-01T00:00:00Z\n",
+        encoding="utf-8",
+    )
+    assert load_mood_identification_ratings_csv(path)[0].guessed_energetic == "B"
+
+
+def test_load_output_rating_csv_parses_m4_and_m5(tmp_path):
+    m4_path = tmp_path / "m4.csv"
+    m4_path.write_text(
+        "output_id,rater_id,would_post,timestamp\n"
+        "pair001_A,alice,yes,2026-01-01T00:00:00Z\n",
+        encoding="utf-8",
+    )
+    m5_path = tmp_path / "m5.csv"
+    m5_path.write_text(
+        "output_id,rater_id,in_time_rating,timestamp\n"
+        "pair001_A,alice,5,2026-01-01T00:00:00Z\n",
+        encoding="utf-8",
+    )
+    assert load_output_ratings_csv(m4_path, "M4")[0].would_post is True
+    assert load_output_ratings_csv(m5_path, "M5")[0].in_time_rating == 5
+
+
+def test_subject_rating_validation_deduplicates_and_reports_missing():
+    first = MoodIdentificationRating(
+        mood_pair_id="mood001", rater_id="alice", guessed_energetic="A", timestamp="t1"
+    )
+    duplicate = first.model_copy(update={"guessed_energetic": "B", "timestamp": "t2"})
+    mood_result = validate_mood_identification_ratings(
+        [first, duplicate], {"mood001", "mood002"}, {"alice", "bob"}
+    )
+    assert mood_result.valid_ratings == [first]
+    assert mood_result.duplicate_keys == [("mood001", "alice")]
+    assert ("mood001", "bob") in mood_result.missing
+    assert ("mood002", "alice") in mood_result.missing
+
+    output = OutputRating(
+        output_id="pair001_A", rater_id="alice", would_post=True, timestamp="t1"
+    )
+    output_result = validate_output_ratings(
+        [output], {"pair001_A", "pair001_B"}, {"alice", "bob"}, metric="M4"
+    )
+    assert not output_result.is_complete
+    assert ("pair001_B", "bob") in output_result.missing
+
+
+def test_subject_rating_jsonl_round_trip(tmp_path):
+    from poc.evaluate.ratings import (
+        append_mood_identification_ratings_jsonl,
+        append_output_ratings_jsonl,
+    )
+
+    mood = MoodIdentificationRating(
+        mood_pair_id="mood001", rater_id="alice", guessed_energetic="A", timestamp="t"
+    )
+    output = OutputRating(output_id="pair001_A", rater_id="alice", in_time_rating=4, timestamp="t")
+    mood_path = tmp_path / "m3.jsonl"
+    output_path = tmp_path / "m5.jsonl"
+    append_mood_identification_ratings_jsonl([mood], mood_path)
+    append_output_ratings_jsonl([output], output_path)
+    assert load_mood_identification_ratings_jsonl(mood_path) == [mood]
+    assert load_output_ratings_jsonl(output_path) == [output]

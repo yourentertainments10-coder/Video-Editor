@@ -1,3 +1,12 @@
+# Development Workflow
+
+> The models named below (Fable, Sonnet, Opus) are **development assistants**
+> used by the developer to design and write code. They are not part of the
+> product and are never called at runtime. The shipped editor uses no
+> external AI (`OFFLINE_POLICY.md`). Runtime intelligence for stages 03-04
+> is the offline Local Director (`LOCAL_DIRECTOR.md`).
+
+```
 00 - Master Architecture
 Model: Fable
         │
@@ -40,3 +49,4 @@ Model: Sonnet / Opus
         ▼
 07 - Deployment & DevOps
 Model: Sonnet + Fable for architecture review
+```

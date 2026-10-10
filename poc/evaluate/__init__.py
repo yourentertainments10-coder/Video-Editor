@@ -4,7 +4,13 @@ pipeline; this package only generates paired evaluation data, blinds it,
 ingests ratings, and computes docs/MVP.md Section 10's metrics exactly.
 """
 
-from poc.evaluate.blind import AnswerKey, BlindAssignment, assign_blind_labels
+from poc.evaluate.blind import (
+    AnswerKey,
+    BlindAssignment,
+    MoodAnswerKey,
+    MoodBlindAssignment,
+    assign_blind_labels,
+)
 from poc.evaluate.generate import (
     EvaluationGenerationError,
     FootageSetSpec,
@@ -12,6 +18,7 @@ from poc.evaluate.generate import (
     MusicTrackSpec,
     build_blind_dataset,
     generate_dataset,
+    generate_mood_dataset,
     generate_mood_identification_pair,
     generate_pair,
 )
@@ -35,9 +42,18 @@ from poc.evaluate.ratings import (
     OutputRating,
     PairwiseRating,
     RatingValidationResult,
+    SubjectRatingValidationResult,
     append_ratings_jsonl,
+    append_mood_identification_ratings_jsonl,
+    append_output_ratings_jsonl,
     load_pairwise_ratings_csv,
+    load_mood_identification_ratings_csv,
+    load_output_ratings_csv,
     load_ratings_jsonl,
+    load_mood_identification_ratings_jsonl,
+    load_output_ratings_jsonl,
+    validate_mood_identification_ratings,
+    validate_output_ratings,
     validate_pairwise_ratings,
 )
 from poc.evaluate.report import EvaluationReport, RaterBreakdown, TrackMoodBreakdown, build_m2_report, format_report
@@ -53,6 +69,8 @@ __all__ = [
     "M3Result",
     "M4Result",
     "M5Result",
+    "MoodAnswerKey",
+    "MoodBlindAssignment",
     "MoodIdentificationRating",
     "MoodPairManifest",
     "MusicTrackSpec",
@@ -61,8 +79,11 @@ __all__ = [
     "PairwiseRating",
     "RaterBreakdown",
     "RatingValidationResult",
+    "SubjectRatingValidationResult",
     "TrackMoodBreakdown",
     "append_ratings_jsonl",
+    "append_mood_identification_ratings_jsonl",
+    "append_output_ratings_jsonl",
     "assign_blind_labels",
     "build_blind_dataset",
     "build_m2_report",
@@ -74,11 +95,18 @@ __all__ = [
     "decide",
     "format_report",
     "generate_dataset",
+    "generate_mood_dataset",
     "generate_mood_identification_pair",
     "generate_pair",
     "get_git_commit",
     "load_pairwise_ratings_csv",
+    "load_mood_identification_ratings_csv",
+    "load_output_ratings_csv",
     "load_ratings_jsonl",
+    "load_mood_identification_ratings_jsonl",
+    "load_output_ratings_jsonl",
     "validate_pairwise_ratings",
+    "validate_mood_identification_ratings",
+    "validate_output_ratings",
     "wilson_interval",
 ]

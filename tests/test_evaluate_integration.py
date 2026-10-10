@@ -11,14 +11,18 @@ import sys
 from pathlib import Path
 
 import imageio_ffmpeg
+import cv2
 import pytest
 
 from poc.evaluate import (
     AnswerKey,
     FootageSetSpec,
     MusicTrackSpec,
+    MoodAnswerKey,
     build_blind_dataset,
+    compute_m1,
     generate_dataset,
+    generate_mood_dataset,
     generate_pair,
 )
 from poc.timeline.validate import validate
@@ -72,6 +76,10 @@ def test_generate_pair_produces_a_valid_matched_pair(project):
     assert Path(manifest.baseline_video_path).exists()
     assert Path(manifest.cutter_timeline_path).exists()
     assert Path(manifest.baseline_timeline_path).exists()
+    cutter_sheet = project["out_dir"] / "contact_sheets" / "pair001_cutter.png"
+    baseline_sheet = project["out_dir"] / "contact_sheets" / "pair001_baseline.png"
+    assert cutter_sheet.is_file() and baseline_sheet.is_file()
+    assert cv2.imread(str(cutter_sheet)).std() > 0
 
     from poc.timeline.schema import Timeline
 
@@ -81,6 +89,14 @@ def test_generate_pair_produces_a_valid_matched_pair(project):
     assert baseline_tl.provenance.generator == "baseline-v0"
     assert validate(cutter_tl) == []
     assert validate(baseline_tl) == []
+    project["music_path"].write_bytes(project["music_path"].read_bytes() + b"changed")
+    Path(manifest.cutter_video_path).unlink()
+    m1 = compute_m1([manifest], expected_pair_ids={"pair001", "pair002"})
+    assert m1.total_outputs == 4
+    assert m1.passing_outputs == 0
+    assert any("rendered video is missing" in failure for failure in m1.failures)
+    assert any("source changed since generation" in failure for failure in m1.failures)
+    assert any("pair002" in failure and "manifest is missing" in failure for failure in m1.failures)
     # same beat grid / candidate constraints by construction (shared MusicMap/FootageMaps)
     assert cutter_tl.duration_frames == baseline_tl.duration_frames
     assert cutter_tl.music.in_ms == baseline_tl.music.in_ms
@@ -116,6 +132,11 @@ def test_manifest_is_reproducible_across_two_runs(project):
     assert m1.baseline_seed == m2.baseline_seed
     assert m1.cutter_version == m2.cutter_version
     assert m1.git_commit == m2.git_commit
+    assert m1.analysis_version == "poc-analysis-v1"
+    assert len(m1.source_code_fingerprint or "") == 64
+    assert len(m1.input_sha256) == 6
+    assert all(len(digest) == 64 for digest in m1.input_sha256.values())
+    assert m1.media_base_dir == str(project["footage_dir"].parent.parent)
     assert m1.cutter_duration_frames == m2.cutter_duration_frames
     assert m1.baseline_duration_frames == m2.baseline_duration_frames
 
@@ -167,6 +188,28 @@ def test_dataset_videos_are_named_only_a_and_b(project):
         assert {p.name for p in pair_dir.iterdir()} == {"A.mp4", "B.mp4"}
 
 
+def test_m3_reuses_the_existing_m2_cutter_renders(project):
+    footage_set = FootageSetSpec("setA", project["footage_dir"])
+    music = MusicTrackSpec("trackA", project["music_path"])
+    manifests = generate_dataset(
+        [footage_set], [music], ["energetic", "calm"], 8.0,
+        project["out_dir"], base_seed=0,
+    )
+    mood_manifests = generate_mood_dataset(
+        [footage_set], [music], 8.0, project["out_dir"], blind_seed=17,
+        pair_manifests=manifests,
+    )
+    assert len(list((project["out_dir"] / "renders").glob("*.mp4"))) == 4
+    mood_manifest = mood_manifests[0]
+    energetic = next(manifest for manifest in manifests if manifest.mood == "energetic")
+    calm = next(manifest for manifest in manifests if manifest.mood == "calm")
+    expected_a = energetic.cutter_video_path if mood_manifest.a_is_energetic else calm.cutter_video_path
+    expected_b = calm.cutter_video_path if mood_manifest.a_is_energetic else energetic.cutter_video_path
+    import filecmp
+    assert filecmp.cmp(mood_manifest.dataset_a_path, expected_a, shallow=False)
+    assert filecmp.cmp(mood_manifest.dataset_b_path, expected_b, shallow=False)
+
+
 def test_answer_key_correctly_identifies_which_video_is_which(project):
     footage_set = FootageSetSpec("setA", project["footage_dir"])
     music = MusicTrackSpec("trackA", project["music_path"])
@@ -196,6 +239,7 @@ def test_cli_eval_generate_ingest_report_end_to_end(project):
             "--mood", "energetic",
             "--duration", "8",
             "--out", str(out_dir),
+            "--phase", "development",
             "--seed", "0", "--blind-seed", "1",
         ],
         capture_output=True, text=True,
@@ -205,28 +249,82 @@ def test_cli_eval_generate_ingest_report_end_to_end(project):
     assert (out_dir / "dataset" / "pair001" / "A.mp4").exists()
 
     answer_key = AnswerKey.load(out_dir / "answer_key.json")
-    a_is_cutter = answer_key.assignments["pair001"].a_is_cutter
-    chosen = "A" if a_is_cutter else "B"  # rate for the cutter, to get a deterministic PASS
-
+    mood_answer_key = MoodAnswerKey.load(out_dir / "mood_answer_key.json")
+    raters = [f"rater{i}" for i in range(1, 6)]
+    chosen = "A" if answer_key.assignments["pair001"].a_is_cutter else "B"
     ratings_csv = out_dir / "ratings.csv"
-    ratings_csv.write_text(
-        "pair_id,rater_id,chosen_video,reason,timestamp\n"
-        f"pair001,alice,{chosen},,2026-01-01T00:00:00Z\n",
-        encoding="utf-8",
-    )
-    ingest = subprocess.run(
-        [sys.executable, "-m", "poc", "eval", "ingest", "--out", str(out_dir), "--ratings", str(ratings_csv)],
-        capture_output=True, text=True,
-    )
+    ratings_csv.write_text("pair_id,rater_id,chosen_video,reason,timestamp\n" + "".join(
+        f"pair001,{rater},{chosen},,2026-01-01T00:00:00Z\n" for rater in raters
+    ), encoding="utf-8")
+    ingest_args = [sys.executable, "-m", "poc", "eval", "ingest", "--out", str(out_dir), "--ratings", str(ratings_csv)]
+    ingest = subprocess.run(ingest_args, capture_output=True, text=True)
     assert ingest.returncode == 0, ingest.stderr
+    duplicate_ingest = subprocess.run(ingest_args, capture_output=True, text=True)
+    assert duplicate_ingest.returncode == 0, duplicate_ingest.stderr
+    assert "duplicate" in duplicate_ingest.stderr
     assert (out_dir / "ratings.jsonl").exists()
 
+    mood_csv = out_dir / "m3.csv"
+    energetic_side = mood_answer_key.energetic_side["mood001"]
+    mood_csv.write_text(
+        "mood_pair_id,rater_id,guessed_energetic,timestamp\n" + "".join(
+            f"mood001,{rater},{energetic_side},2026-01-01T00:00:00Z\n" for rater in raters
+        ), encoding="utf-8",
+    )
+    output_ids = ["pair001_A", "pair001_B"]
+    for metric, header, value in (
+        ("M4", "output_id,rater_id,would_post,timestamp", "yes"),
+        ("M5", "output_id,rater_id,in_time_rating,timestamp", "4"),
+    ):
+        csv_path = out_dir / f"{metric.lower()}.csv"
+        csv_path.write_text(header + "\n" + "".join(
+            f"{output_id},{rater},{value},2026-01-01T00:00:00Z\n"
+            for output_id in output_ids for rater in raters
+        ), encoding="utf-8")
+        metric_ingest = subprocess.run(
+            [sys.executable, "-m", "poc", "eval", "ingest", "--metric", metric,
+             "--out", str(out_dir), "--ratings", str(csv_path)],
+            capture_output=True, text=True,
+        )
+        assert metric_ingest.returncode == 0, metric_ingest.stderr
+    mood_ingest = subprocess.run(
+        [sys.executable, "-m", "poc", "eval", "ingest", "--metric", "M3",
+         "--out", str(out_dir), "--ratings", str(mood_csv)],
+        capture_output=True, text=True,
+    )
+    assert mood_ingest.returncode == 0, mood_ingest.stderr
+
+    report_args = [sys.executable, "-m", "poc", "eval", "report", "--out", str(out_dir)]
+    undeclared_report = subprocess.run(report_args, capture_output=True, text=True)
+    assert undeclared_report.returncode == 2
+    assert "missing responses: unchecked" in undeclared_report.stdout
+
+    partial_report = subprocess.run(
+        report_args + [part for rater in raters[:4] for part in ("--expected-rater", rater)],
+        capture_output=True, text=True,
+    )
+    assert partial_report.returncode == 2
+    assert "collection complete: no" in partial_report.stdout
+    assert "exactly 5 declared raters=not generated" in partial_report.stdout
+
     report = subprocess.run(
-        [sys.executable, "-m", "poc", "eval", "report", "--out", str(out_dir)],
+        report_args + [part for rater in raters for part in ("--expected-rater", rater)],
         capture_output=True, text=True,
     )
     assert "M2: pairwise preference" in report.stdout
-    assert "cutter wins       : 1" in report.stdout
+    assert "cutter wins       : 5" in report.stdout
+    assert "M2 valid responses: 5/5" in report.stdout
+    assert "M3 (mood id): 5/5 correct" in report.stdout
+    assert "5/5 responses" in report.stdout
+    assert "M4 (usability): 2/2 outputs pass" in report.stdout
+    assert "10/10 responses" in report.stdout
+    assert "M5 (sync): mean 4.00/5 from 10 ratings" in report.stdout
+    assert "collection complete: yes" in report.stdout
+    assert "evaluation phase: development" in report.stdout
+    assert "official verdict eligible: no" in report.stdout
+    assert "duplicate M2 ratings ignored: 5" in report.stdout
+    assert "DIAGNOSTIC ONLY" in report.stdout
+    assert report.returncode == 2
 
 
 def test_cli_eval_ingest_warns_on_unknown_pair(project):
@@ -236,7 +334,7 @@ def test_cli_eval_ingest_warns_on_unknown_pair(project):
             sys.executable, "-m", "poc", "eval", "generate",
             "--footage-set", f"setA={project['footage_dir']}",
             "--music", f"trackA={project['music_path']}",
-            "--mood", "energetic", "--duration", "8", "--out", str(out_dir),
+            "--mood", "energetic", "--duration", "8", "--out", str(out_dir), "--phase", "development",
         ],
         check=True, capture_output=True, text=True,
     )

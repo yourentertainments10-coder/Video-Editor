@@ -63,6 +63,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from poc.timeline.schema import TIMELINE_FPS, ms_to_frame
+from poc.perceive.cache import load_or_compute
 
 __all__ = [
     "SAMPLE_RATE",
@@ -441,7 +442,7 @@ def _to_frames(beats_s: list[float], fps: int) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def analyze_music(
+def _analyze_music_uncached(
     path: str | Path,
     *,
     start_bpm: float = DEFAULT_START_BPM,
@@ -541,4 +542,60 @@ def analyze_music(
         energy=energy,
         windows=windows,
         warnings=warnings,
+    )
+
+
+def analyze_music(
+    path: str | Path,
+    *,
+    start_bpm: float = DEFAULT_START_BPM,
+    tightness: float = DEFAULT_TIGHTNESS,
+    hop_length: int = DEFAULT_HOP_LENGTH,
+    percussive_onset_source: bool = False,
+    offset_ms: float | None = None,
+    refine: bool = False,
+    refine_window_s: float = _DEFAULT_REFINE_WINDOW_S,
+    octave_warn_ratio: float = DEFAULT_OCTAVE_WARN_RATIO,
+    low_energy_rel_db: float = DEFAULT_LOW_ENERGY_REL_DB,
+    silence_db: float = DEFAULT_SILENCE_DB,
+    ffmpeg_exe: str | None = None,
+    cache_dir: str | Path | None = None,
+) -> MusicMap:
+    """Analyze music, reusing a content- and parameter-keyed JSON map."""
+    path = Path(path)
+    ffmpeg_exe = ffmpeg_exe or imageio_ffmpeg.get_ffmpeg_exe()
+    parameters = {
+        "start_bpm": start_bpm,
+        "tightness": tightness,
+        "hop_length": hop_length,
+        "percussive_onset_source": percussive_onset_source,
+        "offset_ms": offset_ms,
+        "refine": refine,
+        "refine_window_s": refine_window_s,
+        "octave_warn_ratio": octave_warn_ratio,
+        "low_energy_rel_db": low_energy_rel_db,
+        "silence_db": silence_db,
+        "ffmpeg_exe": ffmpeg_exe,
+    }
+    return load_or_compute(
+        path,
+        namespace="music",
+        analyzer_version="poc-music-v0.1",
+        parameters=parameters,
+        model=MusicMap,
+        compute=lambda: _analyze_music_uncached(
+            path,
+            start_bpm=start_bpm,
+            tightness=tightness,
+            hop_length=hop_length,
+            percussive_onset_source=percussive_onset_source,
+            offset_ms=offset_ms,
+            refine=refine,
+            refine_window_s=refine_window_s,
+            octave_warn_ratio=octave_warn_ratio,
+            low_energy_rel_db=low_energy_rel_db,
+            silence_db=silence_db,
+            ffmpeg_exe=ffmpeg_exe,
+        ),
+        cache_dir=cache_dir,
     )

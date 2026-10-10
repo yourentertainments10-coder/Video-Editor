@@ -98,6 +98,8 @@ def test_full_pipeline_cutter_mode_produces_every_artifact(project):
         assert p.exists()
     assert result.timeline_path.exists()
     assert output_path.exists()
+    assert result.contact_sheet_path.exists()
+    assert result.contact_sheet_path == project["out_dir"] / "contact_sheet.png"
 
     tl = Timeline.load(result.timeline_path)
     assert tl.provenance.generator == "cutter-v0"
@@ -309,6 +311,7 @@ def test_cli_run_command_end_to_end(project):
             "--mood", "energetic",
             "--duration", "10",
             "--output", str(output_path),
+            "--allow-development-inputs",
         ],
         capture_output=True, text=True,
     )
@@ -328,6 +331,7 @@ def test_cli_reports_errors_on_stderr_with_nonzero_exit(project):
             "--mood", "energetic",
             "--duration", "10",
             "--output", str(project["out_dir"] / "o.mp4"),
+            "--allow-development-inputs",
         ],
         capture_output=True, text=True,
     )

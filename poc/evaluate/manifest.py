@@ -11,6 +11,7 @@ for that separation.
 """
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,9 +19,17 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from poc import __version__ as POC_VERSION
 from poc.decide.style import Mood
 
-__all__ = ["PairManifest", "get_git_commit", "CUTTER_VERSION", "BASELINE_VERSION"]
+__all__ = [
+    "PairManifest",
+    "get_git_commit",
+    "get_source_code_fingerprint",
+    "is_git_worktree_dirty",
+    "CUTTER_VERSION",
+    "BASELINE_VERSION",
+]
 
 # These match Timeline.provenance.generator exactly (poc/timeline/schema.py)
 # -- kept as separate constants here rather than imported for display
@@ -49,6 +58,44 @@ def get_git_commit(repo_dir: Path | None = None) -> str | None:
     return None
 
 
+def is_git_worktree_dirty(repo_dir: Path | None = None) -> bool | None:
+    """Return whether evaluation source/protocol files differ from HEAD,
+    including untracked files, or None when git status is unavailable."""
+    try:
+        proc = subprocess.run(
+            [
+                "git", "status", "--porcelain", "--untracked-files=all", "--",
+                "poc", "pyproject.toml", "docs/EVALUATION_PROTOCOL.md",
+            ],
+            cwd=str(repo_dir) if repo_dir else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        return bool(proc.stdout.strip()) if proc.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def get_source_code_fingerprint(repo_dir: Path | None = None) -> str | None:
+    """Hash the current tracked Python source tree and project metadata."""
+    root = Path(repo_dir) if repo_dir else Path(__file__).resolve().parents[2]
+    paths = sorted((root / "poc").rglob("*.py"))
+    paths.extend((root / "pyproject.toml", root / "docs" / "EVALUATION_PROTOCOL.md"))
+    digest = hashlib.sha256()
+    try:
+        for path in paths:
+            if path.is_file():
+                digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+                digest.update(b"\0")
+                digest.update(path.read_bytes())
+                digest.update(b"\0")
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
 class PairManifest(BaseModel):
     """Everything needed to reproduce one evaluation pair exactly."""
 
@@ -64,7 +111,15 @@ class PairManifest(BaseModel):
     baseline_seed: int
     cutter_version: str = CUTTER_VERSION
     baseline_version: str = BASELINE_VERSION
+    evaluation_phase: Literal["development", "preliminary", "official"] = "development"
     git_commit: str | None = None
+    git_worktree_dirty: bool | None = None
+    source_code_fingerprint: str | None = None
+    software_version: str = POC_VERSION
+    analysis_version: str = "poc-analysis-v1"
+    analysis_parameters: dict[str, dict[str, object]] = Field(default_factory=dict)
+    input_sha256: dict[str, str] = Field(default_factory=dict)
+    media_base_dir: str | None = None
 
     # internal artifact paths -- NOT for rater eyes (a rater only ever
     # sees poc.evaluate.blind's opaque dataset/, never this manifest)

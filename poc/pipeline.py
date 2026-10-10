@@ -28,13 +28,11 @@ Windows drives), this fails clearly rather than crashing on a raw
 ``ValueError`` from ``os.path.commonpath``.
 
 Artifacts are saved next to the final video, in ``--output``'s parent
-directory, not in a separate or temporary location: ``music_map.json``,
-``footage/<original filename>.json`` per input clip, and
-``timeline.json``. There is no content-hash cache here: every run
-re-analyzes every file from scratch. That is a deliberate scope decision
-(flagged in the Step 8 pre-implementation review, not decided silently)
--- MVP.md's ``analysis/<sha1-prefix>.json`` skip-on-rerun cache is a
-separate future component, not part of this orchestration step.
+directory: ``music_map.json``, ``footage/<original filename>.json`` per
+input clip, ``timeline.json``, ``contact_sheet.png``, and the final video.
+Music and footage analysis use the content-addressed JSON cache in
+``poc.perceive.cache``; source content, analyzer version, or analysis
+parameter changes produce a new cache entry.
 """
 from __future__ import annotations
 
@@ -44,6 +42,7 @@ from pathlib import Path
 
 from poc.decide import CutterError, GridError, cut, cut_baseline
 from poc.decide.style import Mood
+from poc.execute.contact_sheet import ContactSheetError, generate_contact_sheet
 from poc.execute.render import FFmpegError, RenderResult, TimelineInvalidError, render
 from poc.perceive.footage import FootageMap, analyze_footage
 from poc.perceive.music import analyze_music
@@ -68,6 +67,7 @@ class PipelineResult:
     footage_map_paths: dict[str, Path]
     timeline_path: Path
     output_path: Path
+    contact_sheet_path: Path
 
 
 def _discover_footage(footage_dir: Path) -> list[Path]:
@@ -209,6 +209,12 @@ def run_pipeline(
     except FFmpegError as e:
         raise PipelineError(f"rendering failed: {e}") from e
 
+    contact_sheet_path = artifacts_dir / "contact_sheet.png"
+    try:
+        generate_contact_sheet(timeline, base_dir, contact_sheet_path)
+    except ContactSheetError as e:
+        raise PipelineError(f"contact sheet generation failed: {e}") from e
+
     return PipelineResult(
         timeline=timeline,
         render_result=render_result,
@@ -216,4 +222,5 @@ def run_pipeline(
         footage_map_paths=footage_map_paths,
         timeline_path=timeline_path,
         output_path=output_path,
+        contact_sheet_path=contact_sheet_path,
     )

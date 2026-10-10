@@ -70,6 +70,7 @@ import imageio_ffmpeg
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
+from poc.perceive.cache import load_or_compute
 __all__ = [
     "DEFAULT_SAMPLE_RATE_HZ",
     "DEFAULT_ANALYSIS_WIDTH",
@@ -246,7 +247,7 @@ def _frame_metrics(gray: np.ndarray, prev_gray: np.ndarray | None) -> tuple[floa
 # ---------------------------------------------------------------------------
 
 
-def analyze_footage(
+def _analyze_footage_uncached(
     path: str | Path,
     *,
     sample_rate_hz: float = DEFAULT_SAMPLE_RATE_HZ,
@@ -284,4 +285,36 @@ def analyze_footage(
         sample_rate_hz=sample_rate_hz,
         analysis_width=analysis_width,
         samples=samples,
+    )
+
+
+def analyze_footage(
+    path: str | Path,
+    *,
+    sample_rate_hz: float = DEFAULT_SAMPLE_RATE_HZ,
+    analysis_width: int = DEFAULT_ANALYSIS_WIDTH,
+    ffmpeg_exe: str | None = None,
+    cache_dir: str | Path | None = None,
+) -> FootageMap:
+    """Analyze footage, reusing a content- and parameter-keyed JSON map."""
+    path = Path(path)
+    ffmpeg_exe = ffmpeg_exe or imageio_ffmpeg.get_ffmpeg_exe()
+    parameters = {
+        "sample_rate_hz": sample_rate_hz,
+        "analysis_width": analysis_width,
+        "ffmpeg_exe": ffmpeg_exe,
+    }
+    return load_or_compute(
+        path,
+        namespace="footage",
+        analyzer_version="poc-footage-v0.1",
+        parameters=parameters,
+        model=FootageMap,
+        compute=lambda: _analyze_footage_uncached(
+            path,
+            sample_rate_hz=sample_rate_hz,
+            analysis_width=analysis_width,
+            ffmpeg_exe=ffmpeg_exe,
+        ),
+        cache_dir=cache_dir,
     )

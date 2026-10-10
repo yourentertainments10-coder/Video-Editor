@@ -186,6 +186,16 @@ def test_m4_overall_passes_when_half_of_outputs_qualify():
     assert result.passed is True
 
 
+def test_m4_uses_every_expected_output_as_denominator():
+    ratings = [_out_rating("o1", f"r{i}", i < 3) for i in range(5)]
+    result = compute_m4(ratings, {"o1", "o2", "o3"})
+    assert result.total_outputs == 3
+    assert result.rated_outputs == 1
+    assert result.passing_outputs == 1
+    assert result.passing_fraction == 1 / 3
+    assert result.passed is False
+
+
 # ---------------------------------------------------------------------------
 # M5
 # ---------------------------------------------------------------------------
@@ -220,11 +230,30 @@ def _m1_pass():
     return M1Result(total_outputs=60, passing_outputs=60, failures=[])
 
 
-def test_decide_all_pass():
+def _m3_m5_pass(m4=None):
+    m3 = compute_m3([_mood_rating("mp1", "r", "A")], {"mp1": "A"})
+    m4 = m4 or compute_m4([_out_rating("o1", f"r{i}", i < 3) for i in range(5)])
+    m5 = compute_m5([_sync_rating("o1", f"r{i}", 4) for i in range(5)])
+    return m3, m4, m5
+
+
+def test_decide_missing_secondary_metrics_is_incomplete():
     key = _answer_key({f"p{i}": True for i in range(30)})
     ratings = [_pw(f"p{i}", "r", "A" if i < 25 else "B") for i in range(30)]
     m2 = compute_m2(ratings, key)
     verdict = decide(_m1_pass(), m2)
+    assert verdict.startswith("INCOMPLETE:")
+    assert "M3, M4, M5" in verdict
+
+
+def test_decide_all_measured_metrics_pass():
+    key = _answer_key({f"p{i}": True for i in range(30)})
+    ratings = [_pw(f"p{i}", "r", "A" if i < 25 else "B") for i in range(30)]
+    m2 = compute_m2(ratings, key)
+    m3 = compute_m3([_mood_rating("mp1", "r", "A")], {"mp1": "A"})
+    m4 = compute_m4([_out_rating("o1", f"r{i}", i < 3) for i in range(5)])
+    m5 = compute_m5([_sync_rating("o1", f"r{i}", 4) for i in range(5)])
+    verdict = decide(_m1_pass(), m2, m3, m4, m5)
     assert "hypothesis validated" in verdict
 
 
@@ -233,7 +262,8 @@ def test_decide_m2_passes_m4_fails():
     ratings = [_pw(f"p{i}", "r", "A" if i < 25 else "B") for i in range(30)]
     m2 = compute_m2(ratings, key)
     m4 = compute_m4([_out_rating("o1", f"r{i}", would_post=False) for i in range(5)])
-    verdict = decide(_m1_pass(), m2, m4=m4)
+    m3, _, m5 = _m3_m5_pass()
+    verdict = decide(_m1_pass(), m2, m3, m4, m5)
     assert "not good enough to ship" in verdict
 
 
@@ -241,7 +271,8 @@ def test_decide_m2_fails_near_50():
     key = _answer_key({f"p{i}": True for i in range(10)})
     ratings = [_pw(f"p{i}", "r", "A" if i < 5 else "B") for i in range(10)]
     m2 = compute_m2(ratings, key)
-    verdict = decide(_m1_pass(), m2)
+    m3, m4, m5 = _m3_m5_pass()
+    verdict = decide(_m1_pass(), m2, m3, m4, m5)
     assert "adds nothing" in verdict
 
 
@@ -249,5 +280,6 @@ def test_decide_m2_fails_after_iteration_with_faces():
     key = _answer_key({f"p{i}": True for i in range(10)})
     ratings = [_pw(f"p{i}", "r", "A" if i < 5 else "B") for i in range(10)]
     m2 = compute_m2(ratings, key)
-    verdict = decide(_m1_pass(), m2, iterated_with_faces=True)
+    m3, m4, m5 = _m3_m5_pass()
+    verdict = decide(_m1_pass(), m2, m3, m4, m5, iterated_with_faces=True)
     assert "Stop and rethink perception" in verdict

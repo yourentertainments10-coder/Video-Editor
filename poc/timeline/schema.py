@@ -1,4 +1,4 @@
-"""poc/timeline/schema.py: Timeline Document v0 -- schema only.
+"""Timeline data contracts: legacy MVP v0.1 and additive editable v2.0.
 
 The Timeline Document is the single contract shared by every other module:
 the cutter and baseline (Step 7) will write it, the renderer (Step 4) and
@@ -27,11 +27,13 @@ frame length and is not stored separately.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TIMELINE_FPS = 30
 
@@ -181,3 +183,506 @@ class Timeline(_Strict):
 
     def sorted_clips(self) -> list[Clip]:
         return sorted(self.clips, key=lambda c: c.start_frame)
+
+
+MediaKind = Literal["video", "image", "audio", "music", "text"]
+TrackKind = Literal["video", "overlay", "audio", "music"]
+TransitionId = Literal[
+    "cut", "fade", "dissolve", "dip_to_black", "dip_to_white",
+    "wipe_left", "wipe_right", "wipe_up", "wipe_down",
+]
+EffectId = Literal[
+    "fade_in", "fade_out", "zoom_in", "zoom_out",
+    "pan_left", "pan_right", "pan_up", "pan_down",
+    "brightness", "contrast", "saturation", "blur",
+]
+
+
+class TimeBase(_Strict):
+    """Integer timeline ticks per second; the editor document defaults to ms."""
+
+    ticks_per_second: int = Field(default=1000, gt=0)
+
+
+class EditorSettings(_Strict):
+    fps_num: int = Field(default=30, gt=0)
+    fps_den: int = Field(default=1, gt=0)
+    width: int = Field(default=1920, gt=0)
+    height: int = Field(default=1080, gt=0)
+
+
+class MediaAsset(_Strict):
+    """Stable reference to imported media or a text payload."""
+
+    asset_id: str = Field(min_length=1)
+    kind: MediaKind
+    uri: str | None = None
+    text: str | None = None
+    duration_ms: int | None = Field(default=None, gt=0)
+    mime_type: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "MediaAsset":
+        if self.kind == "text":
+            if not self.text:
+                raise ValueError("text assets require non-empty text")
+            if self.uri is not None:
+                raise ValueError("text assets cannot have a media uri")
+        elif not self.uri:
+            raise ValueError(f"{self.kind} assets require a uri")
+        elif self.text is not None:
+            raise ValueError(f"{self.kind} assets cannot contain text payloads")
+        return self
+
+
+class Layer(_Strict):
+    layer_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    order: int = Field(ge=0)
+    visible: bool = True
+    locked: bool = False
+
+
+class Track(_Strict):
+    track_id: str = Field(min_length=1)
+    kind: TrackKind
+    layer_id: str = Field(min_length=1)
+    name: str = ""
+    muted: bool = False
+
+
+class CropRect(_Strict):
+    """Normalized source crop rectangle, expressed as fractions of the frame."""
+
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+    width: float = Field(gt=0.0, le=1.0)
+    height: float = Field(gt=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _fits_unit_frame(self) -> "CropRect":
+        if self.x + self.width > 1.0 or self.y + self.height > 1.0:
+            raise ValueError("crop rectangle must fit within the normalized source frame")
+        return self
+
+
+class Transform(_Strict):
+    crop: CropRect | None = None
+    scale_x: float = Field(default=1.0, gt=0.0)
+    scale_y: float = Field(default=1.0, gt=0.0)
+    position_x: float = 0.0
+    position_y: float = 0.0
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class AudioProperties(_Strict):
+    gain_db: float = 0.0
+    pan: float = Field(default=0.0, ge=-1.0, le=1.0)
+    muted: bool = False
+    fade_in_ms: int = Field(default=0, ge=0)
+    fade_out_ms: int = Field(default=0, ge=0)
+
+
+class FadeTransitionParameters(_Strict):
+    curve: Literal["linear", "ease_in", "ease_out"] = "linear"
+
+
+class DissolveTransitionParameters(_Strict):
+    mask_seed: int
+    softness: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class DipTransitionParameters(_Strict):
+    peak_fraction: float = Field(default=0.5, ge=0.1, le=0.9)
+    hold_fraction: float = Field(default=0.0, ge=0.0, le=0.5)
+
+
+class WipeTransitionParameters(_Strict):
+    softness: float = Field(default=0.0, ge=0.0, le=0.5)
+
+
+TransitionParameters = (
+    FadeTransitionParameters
+    | DissolveTransitionParameters
+    | DipTransitionParameters
+    | WipeTransitionParameters
+)
+
+
+class TransitionRef(_Strict):
+    """A transition at the incoming boundary immediately before its clip."""
+
+    transition_id: TransitionId
+    duration_ticks: int = Field(default=500, ge=0, le=30000)
+    parameters: TransitionParameters | None = None
+    boundary: Literal["incoming"] = "incoming"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _parse_transition_parameters(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        transition_id = value.get("transition_id")
+        parameter_model = _TRANSITION_PARAMETER_MODELS.get(transition_id)
+        parsed = dict(value)
+        if transition_id == "cut":
+            if parsed.get("duration_ticks") is None:
+                parsed["duration_ticks"] = 0
+            if parsed.get("parameters") is not None:
+                raise ValueError("cut transitions do not accept parameters")
+            return parsed
+        if transition_id in TransitionId.__args__ and parsed.get("duration_ticks") is None:
+            parsed["duration_ticks"] = 500
+        if parameter_model is not None:
+            raw_parameters = parsed.get("parameters", {})
+            if isinstance(raw_parameters, BaseModel):
+                raw_parameters = raw_parameters.model_dump()
+            parsed["parameters"] = parameter_model.model_validate(raw_parameters)
+        return parsed
+
+    @model_validator(mode="after")
+    def _duration_matches_kind(self) -> "TransitionRef":
+        if self.transition_id == "cut" and self.duration_ticks != 0:
+            raise ValueError("cut transition duration_ticks must be 0")
+        if self.transition_id != "cut" and self.duration_ticks <= 0:
+            raise ValueError("non-cut transition duration_ticks must be greater than 0")
+        return self
+
+
+class TransitionParameterField(_Strict):
+    name: str
+    value_type: Literal["integer", "number", "string"]
+    required: bool
+    default: int | float | str | None = None
+    minimum: int | float | None = None
+    maximum: int | float | None = None
+
+
+class TransitionMetadata(_Strict):
+    transition_id: TransitionId
+    name: str
+    parameter_schema: tuple[TransitionParameterField, ...]
+    duration_default_ticks: int
+    duration_min_ticks: int
+    duration_max_ticks: int
+    renderable: bool
+    deterministic: bool
+    behavior_contract: str
+
+
+_TRANSITION_PARAMETER_MODELS: dict[str, type[BaseModel]] = {
+    "fade": FadeTransitionParameters,
+    "dissolve": DissolveTransitionParameters,
+    "dip_to_black": DipTransitionParameters,
+    "dip_to_white": DipTransitionParameters,
+    "wipe_left": WipeTransitionParameters,
+    "wipe_right": WipeTransitionParameters,
+    "wipe_up": WipeTransitionParameters,
+    "wipe_down": WipeTransitionParameters,
+}
+
+
+def _transition_field(
+    name: str,
+    value_type: Literal["integer", "number", "string"],
+    *,
+    required: bool = False,
+    default: int | float | str | None = None,
+    minimum: int | float | None = None,
+    maximum: int | float | None = None,
+) -> TransitionParameterField:
+    return TransitionParameterField(
+        name=name, value_type=value_type, required=required, default=default,
+        minimum=minimum, maximum=maximum,
+    )
+
+
+_FADE_TRANSITION_SCHEMA = (_transition_field("curve", "string", default="linear"),)
+_DISSOLVE_TRANSITION_SCHEMA = (
+    _transition_field("mask_seed", "integer", required=True),
+    _transition_field("softness", "number", default=0.0, minimum=0.0, maximum=1.0),
+)
+_DIP_TRANSITION_SCHEMA = (
+    _transition_field("peak_fraction", "number", default=0.5, minimum=0.1, maximum=0.9),
+    _transition_field("hold_fraction", "number", default=0.0, minimum=0.0, maximum=0.5),
+)
+_WIPE_TRANSITION_SCHEMA = (_transition_field("softness", "number", default=0.0, minimum=0.0, maximum=0.5),)
+
+TRANSITION_CATALOGUE: tuple[TransitionMetadata, ...] = (
+    TransitionMetadata(transition_id="cut", name="Cut", parameter_schema=(), duration_default_ticks=0, duration_min_ticks=0, duration_max_ticks=0, renderable=False, deterministic=True, behavior_contract="Instant boundary change with no overlap or generated frames."),
+    TransitionMetadata(transition_id="fade", name="Fade", parameter_schema=_FADE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Linear or eased blend between outgoing and incoming scenes over duration_ticks."),
+    TransitionMetadata(transition_id="dissolve", name="Dissolve", parameter_schema=_DISSOLVE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Per-pixel dissolve using a fixed mask_seed and softness over duration_ticks."),
+    TransitionMetadata(transition_id="dip_to_black", name="Dip to Black", parameter_schema=_DIP_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Fade outgoing scene to black then reveal incoming scene using peak_fraction and hold_fraction."),
+    TransitionMetadata(transition_id="dip_to_white", name="Dip to White", parameter_schema=_DIP_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Fade outgoing scene to white then reveal incoming scene using peak_fraction and hold_fraction."),
+    TransitionMetadata(transition_id="wipe_left", name="Wipe Left", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic left-moving boundary over duration_ticks."),
+    TransitionMetadata(transition_id="wipe_right", name="Wipe Right", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic right-moving boundary over duration_ticks."),
+    TransitionMetadata(transition_id="wipe_up", name="Wipe Up", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic upward-moving boundary over duration_ticks."),
+    TransitionMetadata(transition_id="wipe_down", name="Wipe Down", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic downward-moving boundary over duration_ticks."),
+)
+
+
+def get_transition_metadata(transition_id: TransitionId) -> TransitionMetadata:
+    for metadata in TRANSITION_CATALOGUE:
+        if metadata.transition_id == transition_id:
+            return metadata
+    raise KeyError(f"unknown transition id: {transition_id}")
+
+
+def serialize_transition_catalogue() -> str:
+    return json.dumps(
+        [item.model_dump(mode="json") for item in TRANSITION_CATALOGUE],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+class FadeParameters(_Strict):
+    duration_ms: int = Field(default=300, ge=1, le=5000)
+
+
+class ZoomInParameters(_Strict):
+    from_scale: float = Field(default=1.0, ge=0.1, le=4.0)
+    to_scale: float = Field(default=1.2, ge=0.1, le=4.0)
+    duration_ms: int = Field(default=1000, ge=1, le=30000)
+
+    @model_validator(mode="after")
+    def _increases_scale(self) -> "ZoomInParameters":
+        if self.to_scale < self.from_scale:
+            raise ValueError("zoom_in to_scale must be greater than or equal to from_scale")
+        return self
+
+
+class ZoomOutParameters(_Strict):
+    from_scale: float = Field(default=1.2, ge=0.1, le=4.0)
+    to_scale: float = Field(default=1.0, ge=0.1, le=4.0)
+    duration_ms: int = Field(default=1000, ge=1, le=30000)
+
+    @model_validator(mode="after")
+    def _decreases_scale(self) -> "ZoomOutParameters":
+        if self.to_scale > self.from_scale:
+            raise ValueError("zoom_out to_scale must be less than or equal to from_scale")
+        return self
+
+
+class PanParameters(_Strict):
+    distance: float = Field(default=0.1, ge=0.0, le=0.5)
+    duration_ms: int = Field(default=1000, ge=1, le=30000)
+
+
+class BrightnessParameters(_Strict):
+    amount: float = Field(ge=-1.0, le=1.0)
+
+
+class ContrastParameters(_Strict):
+    factor: float = Field(default=1.0, ge=0.0, le=3.0)
+
+
+class SaturationParameters(_Strict):
+    factor: float = Field(default=1.0, ge=0.0, le=3.0)
+
+
+class BlurParameters(_Strict):
+    radius: float = Field(ge=0.0, le=50.0)
+
+
+EffectParameters = (
+    FadeParameters
+    | ZoomInParameters
+    | ZoomOutParameters
+    | PanParameters
+    | BrightnessParameters
+    | ContrastParameters
+    | SaturationParameters
+    | BlurParameters
+)
+
+
+class EffectRef(_Strict):
+    """Allowlisted effect specification with effect-specific typed parameters."""
+
+    effect_id: EffectId
+    parameters: EffectParameters
+
+    @model_validator(mode="before")
+    @classmethod
+    def _parse_effect_parameters(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        effect_id = value.get("effect_id")
+        parameter_model: type[BaseModel] | None = _EFFECT_PARAMETER_MODELS.get(effect_id)
+        if parameter_model is None:
+            return value
+        parsed = dict(value)
+        raw_parameters = parsed.get("parameters", {})
+        if isinstance(raw_parameters, BaseModel):
+            raw_parameters = raw_parameters.model_dump()
+        parsed["parameters"] = parameter_model.model_validate(raw_parameters)
+        return parsed
+
+
+class EffectParameterField(_Strict):
+    name: str
+    value_type: Literal["integer", "number"]
+    required: bool
+    default: int | float | None = None
+    minimum: int | float | None = None
+    maximum: int | float | None = None
+
+
+class EffectMetadata(_Strict):
+    effect_id: EffectId
+    name: str
+    parameter_schema: tuple[EffectParameterField, ...]
+    renderable: bool
+    deterministic: bool
+    behavior_contract: str
+
+
+_EFFECT_PARAMETER_MODELS: dict[str, type[BaseModel]] = {
+    "fade_in": FadeParameters,
+    "fade_out": FadeParameters,
+    "zoom_in": ZoomInParameters,
+    "zoom_out": ZoomOutParameters,
+    "pan_left": PanParameters,
+    "pan_right": PanParameters,
+    "pan_up": PanParameters,
+    "pan_down": PanParameters,
+    "brightness": BrightnessParameters,
+    "contrast": ContrastParameters,
+    "saturation": SaturationParameters,
+    "blur": BlurParameters,
+}
+
+
+def _field_definition(
+    name: str,
+    value_type: Literal["integer", "number"],
+    *,
+    required: bool = False,
+    default: int | float | None = None,
+    minimum: int | float | None = None,
+    maximum: int | float | None = None,
+) -> EffectParameterField:
+    return EffectParameterField(
+        name=name, value_type=value_type, required=required, default=default,
+        minimum=minimum, maximum=maximum,
+    )
+
+
+_FADE_SCHEMA = (_field_definition("duration_ms", "integer", default=300, minimum=1, maximum=5000),)
+_ZOOM_IN_SCHEMA = (
+    _field_definition("from_scale", "number", default=1.0, minimum=0.1, maximum=4.0),
+    _field_definition("to_scale", "number", default=1.2, minimum=0.1, maximum=4.0),
+    _field_definition("duration_ms", "integer", default=1000, minimum=1, maximum=30000),
+)
+_ZOOM_OUT_SCHEMA = (
+    _field_definition("from_scale", "number", default=1.2, minimum=0.1, maximum=4.0),
+    _field_definition("to_scale", "number", default=1.0, minimum=0.1, maximum=4.0),
+    _field_definition("duration_ms", "integer", default=1000, minimum=1, maximum=30000),
+)
+_PAN_SCHEMA = (
+    _field_definition("distance", "number", default=0.1, minimum=0.0, maximum=0.5),
+    _field_definition("duration_ms", "integer", default=1000, minimum=1, maximum=30000),
+)
+
+EFFECT_CATALOGUE: tuple[EffectMetadata, ...] = (
+    EffectMetadata(effect_id="fade_in", name="Fade In", parameter_schema=_FADE_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear opacity from 0 to 1 over duration_ms."),
+    EffectMetadata(effect_id="fade_out", name="Fade Out", parameter_schema=_FADE_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear opacity from 1 to 0 over duration_ms."),
+    EffectMetadata(effect_id="zoom_in", name="Zoom In", parameter_schema=_ZOOM_IN_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear scale interpolation from from_scale to to_scale over duration_ms."),
+    EffectMetadata(effect_id="zoom_out", name="Zoom Out", parameter_schema=_ZOOM_OUT_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear scale interpolation from from_scale to to_scale over duration_ms."),
+    EffectMetadata(effect_id="pan_left", name="Pan Left", parameter_schema=_PAN_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear horizontal translation left by normalized distance over duration_ms."),
+    EffectMetadata(effect_id="pan_right", name="Pan Right", parameter_schema=_PAN_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear horizontal translation right by normalized distance over duration_ms."),
+    EffectMetadata(effect_id="pan_up", name="Pan Up", parameter_schema=_PAN_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear vertical translation up by normalized distance over duration_ms."),
+    EffectMetadata(effect_id="pan_down", name="Pan Down", parameter_schema=_PAN_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear vertical translation down by normalized distance over duration_ms."),
+    EffectMetadata(effect_id="brightness", name="Brightness", parameter_schema=(_field_definition("amount", "number", required=True, minimum=-1.0, maximum=1.0),), renderable=False, deterministic=True, behavior_contract="Apply a constant normalized brightness adjustment amount."),
+    EffectMetadata(effect_id="contrast", name="Contrast", parameter_schema=(_field_definition("factor", "number", default=1.0, minimum=0.0, maximum=3.0),), renderable=False, deterministic=True, behavior_contract="Apply a constant contrast multiplier factor."),
+    EffectMetadata(effect_id="saturation", name="Saturation", parameter_schema=(_field_definition("factor", "number", default=1.0, minimum=0.0, maximum=3.0),), renderable=False, deterministic=True, behavior_contract="Apply a constant saturation multiplier factor."),
+    EffectMetadata(effect_id="blur", name="Blur", parameter_schema=(_field_definition("radius", "number", required=True, minimum=0.0, maximum=50.0),), renderable=False, deterministic=True, behavior_contract="Apply a constant blur radius in pixels."),
+)
+
+
+def get_effect_metadata(effect_id: EffectId) -> EffectMetadata:
+    for metadata in EFFECT_CATALOGUE:
+        if metadata.effect_id == effect_id:
+            return metadata
+    raise KeyError(f"unknown effect id: {effect_id}")
+
+
+def serialize_effect_catalogue() -> str:
+    """Return stable JSON catalogue data, preserving the declared order."""
+    return json.dumps(
+        [item.model_dump(mode="json") for item in EFFECT_CATALOGUE],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+class AnimationRef(_Strict):
+    animation_id: Literal["fade", "move", "scale", "opacity"]
+
+
+class EditorClip(_Strict):
+    """A stable scene/clip placement that references an asset and track."""
+
+    clip_id: str = Field(min_length=1)
+    asset_id: str = Field(min_length=1)
+    track_id: str = Field(min_length=1)
+    start_tick: int = Field(ge=0)
+    duration_ticks: int = Field(gt=0)
+    source_in_ms: int | None = Field(default=None, ge=0)
+    source_out_ms: int | None = Field(default=None, ge=0)
+    transform: Transform = Field(default_factory=Transform)
+    audio: AudioProperties | None = None
+    transition: TransitionRef | None = None
+    effects: list[EffectRef] = Field(default_factory=list)
+    animations: list[AnimationRef] = Field(default_factory=list)
+    score: float | None = None
+    rationale: dict[str, float] = Field(default_factory=dict)
+
+
+class TimelineMarker(_Strict):
+    marker_id: str = Field(min_length=1)
+    kind: Literal["beat", "section", "custom"]
+    position_tick: int = Field(ge=0)
+    label: str | None = None
+    value: float | None = None
+
+
+class EditorTimeline(_Strict):
+    """Versioned project timeline for future multi-track editing operations.
+
+    This model is data-only in P2.1. It is intentionally separate from the
+    v0.1 ``Timeline`` still consumed by the cutter, evaluator, and renderer.
+    """
+
+    schema_version: Literal["1.0"] = "1.0"
+    project_id: str = Field(default_factory=lambda: f"project_{uuid4().hex}", min_length=1)
+    timeline_id: str = Field(default_factory=lambda: f"timeline_{uuid4().hex}", min_length=1)
+    revision: int = Field(default=1, ge=1)
+    parent_revision: int | None = Field(default=None, ge=1)
+    duration_ticks: int = Field(gt=0)
+    time_base: TimeBase = Field(default_factory=TimeBase)
+    settings: EditorSettings = Field(default_factory=EditorSettings)
+    music_asset_id: str | None = None
+    music_track_id: str | None = None
+    assets: list[MediaAsset] = Field(default_factory=list)
+    layers: list[Layer] = Field(default_factory=list)
+    tracks: list[Track] = Field(default_factory=list)
+    clips: list[EditorClip] = Field(default_factory=list)
+    markers: list[TimelineMarker] = Field(default_factory=list)
+    provenance: Provenance | None = None
+
+    @classmethod
+    def load(cls, path: str | Path) -> "EditorTimeline":
+        return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+    def save(self, path: str | Path) -> None:
+        Path(path).write_text(self.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+    def asset_by_id(self, asset_id: str) -> MediaAsset:
+        return next(asset for asset in self.assets if asset.asset_id == asset_id)
+
+    @property
+    def duration_ms(self) -> int:
+        return int(round(self.duration_ticks * 1000 / self.time_base.ticks_per_second))

@@ -31,6 +31,8 @@ instead.
 from __future__ import annotations
 
 import csv
+import hashlib
+import inspect
 import os
 import random
 import shutil
@@ -42,8 +44,19 @@ from pydantic import BaseModel, ConfigDict
 
 from poc.decide import cut, cut_baseline
 from poc.decide.style import Mood
-from poc.evaluate.blind import AnswerKey, assign_blind_labels
-from poc.evaluate.manifest import PairManifest, get_git_commit
+from poc.execute.contact_sheet import generate_contact_sheet
+from poc.evaluate.blind import (
+    AnswerKey,
+    MoodAnswerKey,
+    MoodBlindAssignment,
+    assign_blind_labels,
+)
+from poc.evaluate.manifest import (
+    PairManifest,
+    get_git_commit,
+    get_source_code_fingerprint,
+    is_git_worktree_dirty,
+)
 from poc.execute.render import render
 from poc.perceive.footage import analyze_footage
 from poc.perceive.music import analyze_music
@@ -56,6 +69,7 @@ __all__ = [
     "MoodPairManifest",
     "generate_pair",
     "generate_dataset",
+    "generate_mood_dataset",
     "build_blind_dataset",
     "generate_mood_identification_pair",
 ]
@@ -81,6 +95,23 @@ class MusicTrackSpec:
 
 def _relpath(path: Path, base_dir: Path) -> str:
     return Path(os.path.relpath(path, base_dir)).as_posix()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _analysis_parameters(function) -> dict[str, object]:
+    return {
+        name: parameter.default
+        for name, parameter in inspect.signature(function).parameters.items()
+        if parameter.default is not inspect.Parameter.empty
+        and isinstance(parameter.default, (str, int, float, bool, type(None)))
+    }
 
 
 def _discover_footage(footage_dir: Path) -> list[Path]:
@@ -116,6 +147,7 @@ def generate_pair(
     *,
     baseline_seed: int,
     ffmpeg_exe: str | None = None,
+    evaluation_phase: str = "development",
 ) -> PairManifest:
     """Generate one matched cutter-v0/baseline-v0 pair: same footage,
     same music, same mood, same duration, same MusicMap/FootageMaps
@@ -170,6 +202,13 @@ def generate_pair(
         t0 = time.monotonic()
         render(baseline_tl, base_dir, baseline_video_path, ffmpeg_exe=ffmpeg_exe)
         baseline_render_seconds = time.monotonic() - t0
+        contact_sheets_dir = out_dir / "contact_sheets"
+        generate_contact_sheet(
+            cutter_tl, base_dir, contact_sheets_dir / f"{pair_id}_cutter.png"
+        )
+        generate_contact_sheet(
+            baseline_tl, base_dir, contact_sheets_dir / f"{pair_id}_baseline.png"
+        )
     except Exception as e:
         raise EvaluationGenerationError(f"rendering failed for pair {pair_id}: {e}") from e
 
@@ -182,7 +221,19 @@ def generate_pair(
         mood=mood,
         duration_s=duration_s,
         baseline_seed=baseline_seed,
+        evaluation_phase=evaluation_phase,
         git_commit=get_git_commit(),
+        git_worktree_dirty=is_git_worktree_dirty(),
+        source_code_fingerprint=get_source_code_fingerprint(),
+        analysis_parameters={
+            "footage": _analysis_parameters(analyze_footage),
+            "music": _analysis_parameters(analyze_music),
+        },
+        input_sha256={
+            **{_relpath(file, base_dir): _sha256_file(file) for file in footage_files},
+            rel_music_path: _sha256_file(music_path),
+        },
+        media_base_dir=str(base_dir),
         cutter_timeline_path=str(cutter_timeline_path),
         baseline_timeline_path=str(baseline_timeline_path),
         cutter_video_path=str(cutter_video_path),
@@ -205,6 +256,7 @@ def generate_dataset(
     *,
     base_seed: int = 0,
     ffmpeg_exe: str | None = None,
+    evaluation_phase: str = "development",
 ) -> list[PairManifest]:
     """One pair per (footage set, music track, mood) combination -- the
     full MVP.md test-set grid is 5 footage sets x 3 tracks x 2 moods = 30
@@ -220,7 +272,9 @@ def generate_dataset(
                 manifests.append(
                     generate_pair(
                         footage_set, music, mood, duration_s, pair_id, out_dir,
-                        baseline_seed=base_seed + index, ffmpeg_exe=ffmpeg_exe,
+                        baseline_seed=base_seed + index,
+                        ffmpeg_exe=ffmpeg_exe,
+                        evaluation_phase=evaluation_phase,
                     )
                 )
     return manifests
@@ -235,7 +289,33 @@ def _write_rating_template(dataset_dir: Path, pair_ids: list[str]) -> None:
             writer.writerow([pid, "", "", "", ""])
 
 
-_INSTRUCTIONS_TEXT = """# Rater instructions (M2: which edit is better)
+def _write_secondary_rating_templates(
+    dataset_dir: Path,
+    pair_ids: list[str],
+    mood_pair_ids: list[str],
+) -> None:
+    templates = {
+        "m3_rating_sheet_template.csv": (
+            ["mood_pair_id", "rater_id", "guessed_energetic", "timestamp"],
+            [[pair_id, "", "", ""] for pair_id in mood_pair_ids],
+        ),
+        "m4_rating_sheet_template.csv": (
+            ["output_id", "rater_id", "would_post", "timestamp"],
+            [[f"{pair_id}_{side}", "", "", ""] for pair_id in pair_ids for side in ("A", "B")],
+        ),
+        "m5_rating_sheet_template.csv": (
+            ["output_id", "rater_id", "in_time_rating", "timestamp"],
+            [[f"{pair_id}_{side}", "", "", ""] for pair_id in pair_ids for side in ("A", "B")],
+        ),
+    }
+    for name, (header, rows) in templates.items():
+        with open(dataset_dir / name, "w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            writer.writerow(header)
+            writer.writerows(rows)
+
+
+_INSTRUCTIONS_TEXT = """# Rater instructions
 
 For each pair (one `pairNNN/` folder), watch `A.mp4` and `B.mp4`. Both are
 the same length, the same music, and the same mood -- only which moments
@@ -253,6 +333,14 @@ Fill in one row of `rating_sheet_template.csv` per pair:
 Do not look at any file outside this `dataset/` folder -- there is
 nothing there that would tell you which system made which video, and
 nothing to gain from trying to guess.
+
+For each `moodNNN/` folder, watch both videos and record which one was
+asked to be energetic in `m3_rating_sheet_template.csv` (`A` or `B`).
+
+For each `pairNNN_A` and `pairNNN_B` output, record whether you would post
+it after small manual tweaks in `m4_rating_sheet_template.csv`, and rate
+whether its cuts feel in time with the music from 1 to 5 in
+`m5_rating_sheet_template.csv`. Use the same rater ID in all sheets.
 """
 
 
@@ -280,6 +368,10 @@ def build_blind_dataset(manifests: list[PairManifest], out_dir: Path, *, blind_s
 
     answer_key.save(out_dir / "answer_key.json")
     _write_rating_template(dataset_dir, pair_ids)
+    mood_pair_ids = sorted(
+        p.name for p in dataset_dir.glob("mood*") if p.is_dir()
+    )
+    _write_secondary_rating_templates(dataset_dir, pair_ids, mood_pair_ids)
     (dataset_dir / "instructions.md").write_text(_INSTRUCTIONS_TEXT, encoding="utf-8")
     return answer_key
 
@@ -296,6 +388,7 @@ class MoodPairManifest(BaseModel):
     footage_set_id: str
     music_id: str
     duration_s: float
+    evaluation_phase: str = "development"
     a_is_energetic: bool
     energetic_timeline_path: str
     calm_timeline_path: str
@@ -316,6 +409,7 @@ def generate_mood_identification_pair(
     *,
     blind_seed: int,
     ffmpeg_exe: str | None = None,
+    evaluation_phase: str = "development",
 ) -> MoodPairManifest:
     """M3's artifact: energetic and calm cutter-v0 outputs of the same
     footage+music, blinded as A/B the same way M2's pairs are, written
@@ -358,6 +452,13 @@ def generate_mood_identification_pair(
     try:
         render(energetic_tl, base_dir, energetic_video_path, ffmpeg_exe=ffmpeg_exe)
         render(calm_tl, base_dir, calm_video_path, ffmpeg_exe=ffmpeg_exe)
+        contact_sheets_dir = out_dir / "contact_sheets"
+        generate_contact_sheet(
+            energetic_tl, base_dir, contact_sheets_dir / f"{mood_pair_id}_energetic.png"
+        )
+        generate_contact_sheet(
+            calm_tl, base_dir, contact_sheets_dir / f"{mood_pair_id}_calm.png"
+        )
     except Exception as e:
         raise EvaluationGenerationError(f"rendering failed for mood pair {mood_pair_id}: {e}") from e
 
@@ -378,9 +479,84 @@ def generate_mood_identification_pair(
         footage_set_id=footage_set.footage_set_id,
         music_id=music.music_id,
         duration_s=duration_s,
+        evaluation_phase=evaluation_phase,
         a_is_energetic=a_is_energetic,
         energetic_timeline_path=str(energetic_timeline_path),
         calm_timeline_path=str(calm_timeline_path),
         dataset_a_path=str(dataset_a_path),
         dataset_b_path=str(dataset_b_path),
     )
+
+
+def generate_mood_dataset(
+    footage_sets: list[FootageSetSpec],
+    music_tracks: list[MusicTrackSpec],
+    duration_s: float,
+    out_dir: Path,
+    *,
+    blind_seed: int,
+    ffmpeg_exe: str | None = None,
+    evaluation_phase: str = "development",
+    pair_manifests: list[PairManifest] | None = None,
+) -> list[MoodPairManifest]:
+    """Generate M3 pairs, reusing M2 cutter renders when both moods exist."""
+    out_dir = Path(out_dir)
+    manifests: list[MoodPairManifest] = []
+    assignments: dict[str, MoodBlindAssignment] = {}
+    pair_by_key = {
+        (manifest.footage_set_id, manifest.music_id, manifest.mood): manifest
+        for manifest in pair_manifests or []
+    }
+    index = 0
+    for footage_set in footage_sets:
+        for music in music_tracks:
+            index += 1
+            mood_pair_id = f"mood{index:03d}"
+            energetic = pair_by_key.get((footage_set.footage_set_id, music.music_id, "energetic"))
+            calm = pair_by_key.get((footage_set.footage_set_id, music.music_id, "calm"))
+            if energetic is not None and calm is not None:
+                a_is_energetic = _mood_blind_rng(mood_pair_id, blind_seed).random() < 0.5
+                source_a = Path(energetic.cutter_video_path if a_is_energetic else calm.cutter_video_path)
+                source_b = Path(calm.cutter_video_path if a_is_energetic else energetic.cutter_video_path)
+                dataset_dir = out_dir / "dataset" / mood_pair_id
+                dataset_dir.mkdir(parents=True, exist_ok=True)
+                dataset_a_path = dataset_dir / "A.mp4"
+                dataset_b_path = dataset_dir / "B.mp4"
+                shutil.copy2(source_a, dataset_a_path)
+                shutil.copy2(source_b, dataset_b_path)
+                manifest = MoodPairManifest(
+                    mood_pair_id=mood_pair_id,
+                    footage_set_id=footage_set.footage_set_id,
+                    music_id=music.music_id,
+                    duration_s=duration_s,
+                    evaluation_phase=evaluation_phase,
+                    a_is_energetic=a_is_energetic,
+                    energetic_timeline_path=energetic.cutter_timeline_path,
+                    calm_timeline_path=calm.cutter_timeline_path,
+                    dataset_a_path=str(dataset_a_path),
+                    dataset_b_path=str(dataset_b_path),
+                )
+            else:
+                manifest = generate_mood_identification_pair(
+                    footage_set,
+                    music,
+                    duration_s,
+                    mood_pair_id,
+                    out_dir,
+                    blind_seed=blind_seed,
+                    ffmpeg_exe=ffmpeg_exe,
+                    evaluation_phase=evaluation_phase,
+                )
+            manifests.append(manifest)
+            assignments[mood_pair_id] = MoodBlindAssignment(
+                mood_pair_id=mood_pair_id,
+                a_is_energetic=manifest.a_is_energetic,
+            )
+
+    mood_manifests_dir = out_dir / "mood_manifests"
+    mood_manifests_dir.mkdir(parents=True, exist_ok=True)
+    for manifest in manifests:
+        path = mood_manifests_dir / f"{manifest.mood_pair_id}.json"
+        path.write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    MoodAnswerKey(seed=blind_seed, assignments=assignments).save(out_dir / "mood_answer_key.json")
+    return manifests

@@ -1,5 +1,14 @@
 GPU Infrastructure Strategy
 
+> **Reconciliation note (2026-10-10).** The product is now local-first and
+> fully offline (`OFFLINE_POLICY.md`, binding). Where this document prefers
+> cloud processing or lists an "External API Implementation", it describes
+> a possible future hosted variant only, which would require a dated
+> amendment to the offline policy. For the current product: everything runs
+> on the user's machine, CPU is the default, and a local GPU (if present)
+> is an optional accelerator behind the same analyzer interfaces. The CPU-
+> first and "benchmark before buying GPU" principles below still apply.
+
 Purpose
 
 This document records the infrastructure decision for GPU usage in the AI-powered autonomous video editing system.
@@ -456,4 +465,4 @@ The key decision is:
 
 GPU infrastructure is a future scaling layer, not a prerequisite for validating the core product.
 
-The current MVP should remain CPU-first.
+The current MVP should remain CPU-first.

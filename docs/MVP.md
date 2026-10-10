@@ -1,6 +1,6 @@
 # MVP v0: Proof of Concept Definition
 
-Version 0.1, 2026-09-05. Status: definition, pre-implementation. Companion to `ARCHITECTURE.md` (the full system) and `ARCHITECTURE_REVIEW.md` (verdicts on it). This document defines the *smallest* thing that tests the product hypothesis. Everything here is deliberately smaller than the MVP scope in ARCHITECTURE.md Section 19; that scope is v0.3, this is v0.
+Version 0.1, 2026-09-05 (consistency fixes 2026-10-10, see `PROJECT_AUDIT.md` §4). Status: v0 product and evaluation specification. This is not a claim that every listed behavior is implemented; current implementation status is in `README.md`. Companion to `ARCHITECTURE.md` (the aspirational system design) and `ARCHITECTURE_REVIEW.md` (verdicts on it). This document defines the *smallest* thing that tests the product hypothesis. Everything here is deliberately smaller than the MVP scope in ARCHITECTURE.md Section 19; that scope is v0.3, this is v0.
 
 ## The hypothesis under test
 
@@ -26,10 +26,14 @@ Claim A is the one nobody has evidence for yet and the one the whole product dep
 Concretely, this command must work end to end:
 
 ```bash
-python -m poc run --footage ./project/footage --music ./project/music.mp3 --mood energetic --duration 20 --out ./project/out
+python -m poc run --footage ./project/footage --music ./project/music/track.mp3 --mood energetic --duration 20 --output ./project/output/final.mp4
 ```
 
-and produce `out/timeline.json` and `out/out.mp4`.
+`--output` (also accepted as `--out`) names the output video file, not a
+directory. Artifacts are written beside it. `--allow-development-inputs`
+explicitly bypasses input limits for synthetic/development work only.
+
+and produce `project/output/final.mp4` with `timeline.json`, `music_map.json`, `footage/` analysis files, and `contact_sheet.png` beside it.
 
 The deliverable is not the tool. The deliverable is the **answer to the hypothesis**, backed by a rater sheet from at least five people over at least 30 outputs. The tool is the instrument.
 
@@ -59,7 +63,7 @@ Each exclusion below has a reason and a re-entry condition. These are decisions,
 
 | Excluded | Reason | Comes back when |
 |----------|--------|-----------------|
-| **LLM of any kind** | See Section 8. The hypothesis is about editing intelligence, not language understanding. | v0.2, after Claim A passes |
+| **LLM of any kind** | See Section 8. The hypothesis is about editing intelligence, not language understanding. | v0.2, after Claim A passes, as the offline rule-based Local Director (`LOCAL_DIRECTOR.md`); no external AI API ever (`OFFLINE_POLICY.md`) |
 | Natural-language briefs, revisions, chat | Same reason. Instruction is an enum. | v0.2 |
 | Timeline versioning, operation grammar, undo, locks | Nothing is being revised in v0. | v0.3 |
 | Transitions (crossfade, dip, whip, flash) | Hard cuts on beats are the strongest form of sync and the cleanest experiment. Transitions blur the timing signal being tested. | After Claim B passes |
@@ -111,25 +115,36 @@ Runtime budget on a laptop CPU for 10 clips totaling 5 minutes of 1080p footage:
 
 ```
 project/
-  footage/            5 to 20 files, .mp4 or .mov, 5 s to 3 min each, any fps or resolution
-  music.mp3           or .wav; at least duration + 10 s long
+    footage/            5 to 20 files, .mp4 or .mov, 5 s to 3 min each, any fps or resolution
+    music/track.mp3     .mp3, .wav, .m4a, or .flac; at least duration + 10 s long
 ```
 
-Plus three CLI flags: `--mood {energetic|calm}`, `--duration <seconds, 15 to 30>`, `--out <dir>`.
+Plus CLI flags: `--mood {energetic|calm}`, `--duration <seconds, 15 to 30>`, and `--output <file.mp4>` (`--out` is an alias).
 
 Optional flags that exist only to unblock testing: `--seed` (baseline randomness), `--bpm-hint` (when the beat tracker locks to half or double tempo), `--music-offset-s` (force the music window start), `--baseline` (produce the random control instead of the scored cut).
 
-Constraints on the footage set, enforced with a clear error: total footage at least 4 times the target duration (so selection has choices), and at least 5 files (so the reuse penalty has somewhere to go). Variable-frame-rate phone video is handled by the renderer normalizing every segment to constant 30 fps; the analyzer samples by timestamp, not frame index.
+Constraints are enforced with actionable errors: 5 to 20 supported video files, each 5 seconds to 3 minutes, with total footage at least 4 times the target duration; music must have an audio stream and be at least 10 seconds longer than the requested output. Variable-frame-rate phone video is handled by the renderer normalizing every segment to constant 30 fps; the analyzer samples by timestamp, not frame index. The prototype is video-only: still images/screenshots are not supported as timeline assets.
 
 Output:
 
 ```
-out/
-  analysis/<sha1-prefix>.json    per-file cache (footage curves or music map)
-  timeline.json                  the Timeline Document
-  out.mp4                        1080p H.264, AAC, faststart
-  contact_sheet.jpg              one thumbnail per clip with slot time and score (debug)
+project/output/                (parent folder of --output)
+    music_map.json                 music analysis result
+    footage/<filename>.json        per-input footage analysis result
+    timeline.json                  the Timeline Document
+    final.mp4                      1080p H.264, AAC, faststart
+    contact_sheet.png              one thumbnail per clip with slot time, source, score, rationale (debug)
 ```
+
+Content-addressed analysis cache is separate from this project output:
+`%LOCALAPPDATA%/poc/analysis` on Windows, `$XDG_CACHE_HOME/poc/analysis` on
+Linux/macOS.
+
+Cache keys include source SHA-256, analyzer version, and effective analysis
+parameters. Changing any of these creates a new cache entry; deleting the
+per-user `poc/analysis` directory clears cached maps. Evaluation manifests
+record source hashes, analysis parameters/version, software version, source
+fingerprint, Git commit, and whether tracked files were dirty at generation.
 
 ---
 
@@ -162,10 +177,9 @@ All via librosa on 22.05 kHz mono:
 |--------|--------|
 | `bpm`, `beats_ms[]` | `librosa.beat.beat_track` with `--bpm-hint` as `start_bpm` when given |
 | `energy_per_beat[]` | RMS energy averaged between consecutive beats, then normalized to 0..1 by percentile across the track |
-| `downbeat_phase` | Assume 4/4. Pick the phase `p` in 0..3 that maximizes summed onset strength over beats where `i mod 4 == p`. Marks every fourth beat from there as a downbeat. |
-| `window_in_ms` | Slide a `duration`-long window over downbeats. `energetic` picks the window with the highest mean energy, `calm` the lowest, ties broken toward the earlier start. Overridable with `--music-offset-s`. |
+| `window_in_ms` | The current v0 implementation starts at the first detected beat, or uses the explicit `--music-offset-s` override. It does not rank candidate music windows by mood. |
 
-Verification before anything else is built on it: the **beat-flash test**. Render a black video with a white frame on every detected beat and a red frame on every downbeat, muxed with the music. Watch it. If the flashes feel off on a track, that track is either excluded from the test set or handled with `--bpm-hint`. This 30-minute check is the cheapest way to find out whether librosa is sufficient or whether allin1 is needed sooner than planned.
+The 4/4 downbeat phase heuristic and mood-ranked music-window selection described in earlier drafts are not implemented. `experiments/beat_flash/CONCLUSION.md` found the phase heuristic unreliable; v0 uses no assumed downbeats. The beat-flash experiment validates beat timing, not downbeat labels. Any later downbeat method requires a separate evaluation and a protocol amendment before use in an official result.
 
 What is deliberately absent: onsets for sub-beat sync, sections, drops, loudness normalization (music gain is a fixed -1 dB with a 1 s fade out).
 
@@ -220,7 +234,7 @@ Timeline positions are **integer frames at a fixed timeline fps of 30** (review 
 
 Present and load-bearing: one implicit video track, beats as informational markers, `rationale` as the debugging signal for why a clip won, `provenance` so an evaluator can tell system from baseline without trusting the filename.
 
-Absent on purpose: tracks, sections, transitions, speed, transform, effects, graphics, `version` and `parent_version` (they arrive with the operation grammar in v0.3), `shot_id` (there are no shots), and `locked`.
+Absent on purpose from the legacy v0.1 timeline: tracks, sections, transitions, speed, transform, effects, graphics, `version` and `parent_version` (they arrive with the operation grammar in v0.3), `shot_id` (there are no shots), and `locked`. P2.1 adds a separate editor-timeline v1.0 model; P2.2 provides explicit v0.1-to-v1.0 dispatch. Neither changes this MVP contract or its cutter/renderer consumers.
 
 Validator invariants for v0, each with a machine-readable code:
 
@@ -263,6 +277,13 @@ The schema maps to the full v1 schema in ARCHITECTURE.md Section 12.2 by wrappin
 - M2 passes, M4 fails: selection works but output is not good enough to ship. Add faces and downbeat-aligned motion peaks, re-run once. If M4 still fails, the product needs semantic understanding (VLM) before it is useful, which changes the cost structure and must be decided explicitly.
 - M2 fails after one iteration with faces: the cheap-signal hypothesis is false for this footage class. Stop and rethink perception before writing any more cutter code.
 
+**Implementation boundary:** the frozen evaluation protocol is
+`docs/EVALUATION_PROTOCOL.md`; its thresholds, dataset size, and decision
+rules remain unchanged. References above to downbeat-aligned motion peaks
+are historical decision-rule text, not a supported v0 capability. Do not
+silently substitute a downbeat heuristic or change the frozen rule; any
+future iteration must preserve the protocol's versioned amendment process.
+
 ### Iteration budget
 
 Two scoring iterations after the first full evaluation. Each iteration is one change to signals or weights, re-run on all 30 pairs. More than two iterations without crossing 70% is a signal to stop, not to keep tuning.
@@ -271,14 +292,14 @@ Two scoring iterations after the first full evaluation. Each iteration is one ch
 
 ## 11. Step-by-step development sequence
 
-Each step ends with something observable. Estimates assume one developer, full time, and a working FFmpeg on PATH.
+Each step ends with something observable. Estimates assume one developer, full time. FFmpeg is provided by the bundled `imageio-ffmpeg` binary; a system FFmpeg on PATH is not required (see README).
 
 | Step | Build | Check before moving on | Time |
 |------|-------|------------------------|------|
 | 0 | Repo skeleton: `poc/` package, `pyproject.toml`, deps (numpy, opencv-python-headless, librosa, pydantic, soundfile). Confirm `ffmpeg -version` and `ffprobe` run. | `python -c "import cv2, librosa, pydantic"` | 1 h |
 | 1 | `timeline.py`: schema, validator, load and save. `examples/hand_timeline.json` with 4 clips from real files. | `python -m poc.timeline examples/hand_timeline.json` prints `OK` and, with a deliberate gap, prints `CONTIGUOUS` | 0.5 day |
 | 2 | `render.py`: timeline to MP4. Per-clip trim and normalize to 1080p 30 fps, concat demuxer, music mux with fade. | Hand timeline renders. `ffprobe` shows exactly `duration_frames` frames. A/V lengths match. Plays in VLC. | 1 day |
-| 3 | `music.py`: beats, energy, downbeats, window. Plus the beat-flash renderer as a subcommand. | Beat-flash video looks right on all 3 test tracks (use `--bpm-hint` if needed). | 1 day |
+| 3 | `music.py`: beats and per-beat energy (as implemented; the downbeat and mood-ranked window parts were dropped, see Section 7). Plus the beat-flash renderer as a subcommand. | Beat-flash video looks right on all 3 test tracks (use `--bpm-hint` if needed). | 1 day |
 | 4 | `grid.py` and `baseline.py`: slots from beats and params; random moment per slot; writes a valid timeline. **First end-to-end beat-synced video with zero editing intelligence.** | `python -m poc run --baseline ...` produces a watchable, on-beat MP4 from real footage. Validator passes. This is also the control for M2. | 0.5 day |
 | 5 | `footage.py`: per-file curves, ffprobe metadata, content-hash cache. `contact_sheet.py` debug output. | Plot motion curve for one file next to its thumbnails; peaks correspond to visible movement. Second run of analysis is instant. | 1 day |
 | 6 | `cutter.py`: candidate generation, scoring, greedy selection with reuse and coverage penalties, rationale. `style.py`: two moods to `CutterParams`. | Same footage and music, `--mood energetic` vs `--mood calm` produce visibly different edits. Rationale in `timeline.json` explains each pick. Personally compare against baseline on 3 sets. | 2 days |
@@ -606,6 +627,6 @@ Style table, v0:
 |-------|-----------|------|
 | beats per cut | 1 when `e >= 0.6`, else 2 | 4 when `e <= 0.5`, else 2 |
 | motion_base, motion_scale | 0.5, 0.5 | 0.1, 0.3 |
-| music window | highest-energy window starting on a downbeat | lowest-energy window starting on a downbeat |
+| music window | *Not implemented in v0:* window starts at the first detected beat or `--music-offset-s` (Section 7). Original plan: highest-energy window on a downbeat | *Not implemented in v0* (same as energetic). Original plan: lowest-energy window on a downbeat |
 
 Slot generation walks the beats from the window start, advancing by "beats per cut" evaluated at the current beat, and stops at the last beat at or before the requested duration. The timeline duration therefore snaps to a beat, which is what a human editor would do too.

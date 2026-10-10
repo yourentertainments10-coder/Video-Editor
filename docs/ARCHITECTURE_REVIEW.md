@@ -2,6 +2,12 @@
 
 Date: 2026-09-05. Reviewer stance: Senior AI Systems Architect, pre-implementation. Verdicts: Keep / Change / Defer.
 
+> **Note (2026-10-10):** item 8's "thin adapter over two official SDKs",
+> item 21's frontier-model effort settings, and the "Vendor lock-in risks"
+> section assumed hosted LLMs. Under `OFFLINE_POLICY.md` there are no hosted
+> providers; the Director is the rule-based `LOCAL_DIRECTOR.md`. All other
+> verdicts stand and override `ARCHITECTURE.md`.
+
 ## Summary verdict
 
 The three-layer split, the symbolic reasoning boundary, the versioned timeline, and the deterministic Cutter are sound and should be kept. The document over-specifies infrastructure for an MVP (workflow engine, four worker types, MinIO, Remotion, Next.js with HLS, two-model cascade), carries three licensing problems (madmom models, InsightFace models, Remotion), and rests on four technically wrong assumptions (raw footage has editorial cuts to detect; the LAION aesthetic head works on SigLIP embeddings; face-box size classifies shot scale for all footage; vertical output can defer reframing). Fix those and the design is ready to build.
