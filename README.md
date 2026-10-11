@@ -38,6 +38,9 @@ FFmpeg is **not** required on PATH: the project depends on `imageio-ffmpeg`,
 which provides its own static FFmpeg binary, so rendering works the same on
 any machine without a system install.
 
+The FFmpeg binary used is: `D:\Python\video editor\.venv\Lib\site-packages\imageio_ffmpeg\binaries\ffmpeg-win-x86_64-v7.1.exe`
+(FFmpeg version 7.1-essentials_build-www.gyan.dev, GPL licensed).
+
 Verify the environment:
 
 ```bash
