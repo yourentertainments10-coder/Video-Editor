@@ -1,0 +1,10 @@
+[
+  {
+    "id": "yunet_face_detector",
+    "file": "face_detection_yunet_2023mar.onnx",
+    "sha256": "PLACEHOLDER_FOR_SHA256_HASH",
+    "licence": "Apache-2.0",
+    "size_bytes": 1048576,
+    "description": "OpenCV YuNet face detection model"
+  }
+]

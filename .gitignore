@@ -19,3 +19,6 @@ Thumbs.db
 project/
 out/
 poc_cache/
+ffmpeg_info.txt
+
+command.md

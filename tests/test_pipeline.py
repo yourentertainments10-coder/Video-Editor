@@ -86,7 +86,7 @@ def project(tmp_path: Path) -> dict:
 # happy path: cutter mode
 # ---------------------------------------------------------------------------
 
-def test_full_pipeline_cutter_mode_produces_every_artifact(project):
+def test_full_pipeline_cutter_mode_produces_every_artifact(project, block_non_loopback_sockets):
     output_path = project["out_dir"] / "final.mp4"
     result = run_pipeline(
         project["footage_dir"], project["music_path"], "energetic", 10.0, output_path
@@ -106,7 +106,7 @@ def test_full_pipeline_cutter_mode_produces_every_artifact(project):
     assert validate(tl) == []
 
 
-def test_full_pipeline_output_is_a_playable_video_with_correct_streams(project):
+def test_full_pipeline_output_is_a_playable_video_with_correct_streams(project, block_non_loopback_sockets):
     output_path = project["out_dir"] / "final.mp4"
     result = run_pipeline(
         project["footage_dir"], project["music_path"], "energetic", 10.0, output_path
