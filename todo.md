@@ -1,4 +1,5 @@
-# AI Video Editor — Developer TODO
+
+  # AI Video Editor — Developer TODO
 
 This is the implementation backlog for the project described by the pasted product-video-editor document, cross-checked against the repository as it stood on 2026-09-30. It is written for a developer who will implement the work and report completion against the acceptance criteria below.
 

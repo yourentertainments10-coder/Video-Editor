@@ -28,8 +28,9 @@ LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 @pytest.fixture(autouse=True)
 def block_non_loopback_sockets(monkeypatch):
-    """Refuse any socket connect call to a non-loopback address."""
+    """Refuse any socket connect or connect_ex call to a non-loopback address."""
     orig_connect = socket.socket.connect
+    orig_connect_ex = socket.socket.connect_ex
 
     def guarded_connect(self, address):
         # address can be (host, port) or (host, port, flowinfo, scopeid) etc.
@@ -47,6 +48,21 @@ def block_non_loopback_sockets(monkeypatch):
                 )
         return orig_connect(self, address)
 
+    def guarded_connect_ex(self, address):
+        if isinstance(address, tuple) and len(address) >= 1:
+            host = address[0]
+            if isinstance(host, bytes):
+                host = host.decode('utf-8', errors='ignore')
+            elif not isinstance(host, str):
+                host = str(host)
+            if host not in LOOPBACK_HOSTS:
+                raise RuntimeError(
+                    f"OFFLINE POLICY VIOLATION: Outbound socket connection to {host!r} "
+                    f"blocked during test execution (loopback only allowed)."
+                )
+        return orig_connect_ex(self, address)
+
     monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
     # Also guard create_connection which uses socket.connect under the hood
     # No need to patch separately as it ends up calling socket.socket.connect
