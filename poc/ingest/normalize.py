@@ -4,15 +4,22 @@ Handles variable frame rate, rotation, HDR, odd dimensions, interlaced audio,
 missing/odd audio, Unicode/long paths, and still images as per RENDER_SPEC §2.
 Implements FFmpeg network gap fixes: -protocol_whitelist file,pipe and rejects
 paths containing "://" with clear error.
+
+Uses PyAV (av library) for structured media probing instead of regex parsing
+ffmpeg -i stderr. PyAV wraps FFmpeg libraries directly and provides structured
+metadata access.
 """
 
 from __future__ import annotations
 
+import fractions
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+import av
 import imageio_ffmpeg
 
 from poc.timeline import MediaAsset
@@ -24,6 +31,156 @@ FFMPEG_NETWORK_SAFE = [
     FFMPEG_EXE,
     "-protocol_whitelist", "file,pipe",
 ]
+
+
+def _has_network_path(path: str) -> bool:
+    """Detect if a path contains network protocol indicators."""
+    return "://" in path
+
+
+def _validate_no_network_paths(*paths: str) -> None:
+    """Reject any path containing network protocols with clear error."""
+    for path in paths:
+        if _has_network_path(path):
+            raise ValueError(
+                f"Network paths are prohibited for security and reproducibility: {path!r}. "
+                f"Only local file paths are allowed."
+            )
+
+
+def _parse_av_probe(path: Path) -> dict:
+    """Probe media file using PyAV and return structured metadata.
+
+    Returns a dict with the same structure as ffprobe JSON would have.
+    """
+    # Use PyAV to open and probe the file
+    container = av.open(str(path))
+
+    result = {
+        "format": {"duration": "0", "tags": {}},
+        "streams": []
+    }
+
+    # Format duration - av.duration is in microseconds (AV_TIME_BASE = 1,000,000)
+    if container.duration is not None:
+        duration_seconds = container.duration / 1_000_000
+        result["format"]["duration"] = str(duration_seconds)
+
+    # Format tags (rotation, etc.)
+    if container.metadata:
+        for key, value in container.metadata.items():
+            if key.lower() == "rotate":
+                result["format"]["tags"]["rotate"] = str(value)
+
+    # Parse streams
+    for stream in container.streams:
+        if stream.type == "video":
+            video_stream = {
+                "codec_type": "video",
+                "width": stream.width,
+                "height": stream.height,
+                "pix_fmt": str(stream.pix_fmt),
+            }
+
+            # Frame rate - use average_rate and guessed_rate
+            if stream.average_rate:
+                video_stream["avg_frame_rate"] = f"{stream.average_rate.numerator}/{stream.average_rate.denominator}"
+            else:
+                video_stream["avg_frame_rate"] = "0/0"
+
+            # r_frame_rate - use guessed_rate if available
+            if stream.guessed_rate:
+                video_stream["r_frame_rate"] = f"{stream.guessed_rate.numerator}/{stream.guessed_rate.denominator}"
+            else:
+                video_stream["r_frame_rate"] = "0/0"
+
+            # Color transfer / HDR detection - from codec context
+            ctx = stream.codec_context
+            color_transfer = ""
+            if hasattr(ctx, "color_trc") and ctx.color_trc is not None:
+                # Map FFmpeg color_trc enum values to string names
+                color_trc_map = {
+                    1: "bt709",          # BT.709 / sRGB
+                    16: "smpte2084",     # PQ (SMPTE ST 2084)
+                    18: "arib-std-b67",  # HLG (ARIB STD-B67)
+                }
+                color_trc_val = ctx.color_trc
+                video_stream["color_transfer"] = color_trc_map.get(color_trc_val, str(color_trc_val))
+
+            # Color primaries
+            if hasattr(ctx, "color_primaries") and ctx.color_primaries is not None:
+                video_stream["color_primaries"] = str(ctx.color_primaries)
+
+            # Field order (interlaced detection)
+            if hasattr(ctx, "field_order") and ctx.field_order is not None:
+                field_order_map = {
+                    0: "progressive",
+                    1: "tt",      # top coded first, top displayed first
+                    2: "bb",      # bottom coded first, bottom displayed first
+                    3: "tb",      # top coded first, bottom displayed first
+                    4: "bt",      # bottom coded first, top displayed first
+                }
+                field_order_val = ctx.field_order
+                video_stream["field_order"] = field_order_map.get(field_order_val, "progressive")
+            else:
+                video_stream["field_order"] = "progressive"
+
+            # Sample aspect ratio
+            if hasattr(ctx, "sample_aspect_ratio") and ctx.sample_aspect_ratio is not None:
+                sar = ctx.sample_aspect_ratio
+                video_stream["sample_aspect_ratio"] = f"{sar.numerator}:{sar.denominator}"
+            else:
+                video_stream["sample_aspect_ratio"] = "1:1"
+
+            # Pixel format from codec context
+            video_stream["pix_fmt"] = str(ctx.pix_fmt)
+
+            # Side data (for rotation detection)
+            side_data_list = []
+            # Check stream metadata for rotation
+            if hasattr(stream, "metadata") and stream.metadata:
+                for key, value in stream.metadata.items():
+                    if key.lower() == "rotate":
+                        side_data_list.append({
+                            "side_data_type": "Rotation",
+                            "rotation": int(value)
+                        })
+            video_stream["side_data_list"] = side_data_list
+
+            # Frame rate
+            if stream.average_rate:
+                video_stream["avg_frame_rate"] = f"{stream.average_rate.numerator}/{stream.average_rate.denominator}"
+            else:
+                video_stream["avg_frame_rate"] = "0/0"
+
+            if stream.guessed_rate:
+                video_stream["r_frame_rate"] = f"{stream.guessed_rate.numerator}/{stream.guessed_rate.denominator}"
+            else:
+                video_stream["r_frame_rate"] = "0/0"
+
+            result["streams"].append(video_stream)
+
+        elif stream.type == "audio":
+            audio_stream = {
+                "codec_type": "audio",
+                "channels": stream.channels,
+                "sample_rate": str(stream.sample_rate),
+            }
+            result["streams"].append(audio_stream)
+
+    # Format duration - av.duration is in microseconds (AV_TIME_BASE = 1,000,000)
+    if container.duration is not None:
+        duration_seconds = container.duration / 1_000_000
+        result["format"]["duration"] = str(duration_seconds)
+
+    # Format tags from container metadata
+    if container.metadata:
+        for key, value in container.metadata.items():
+            if key.lower() == "rotate":
+                result["format"]["tags"]["rotate"] = str(value)
+
+    container.close()
+    return result
 
 
 def _has_network_path(path: str) -> bool:
@@ -65,21 +222,16 @@ def normalize_asset(asset: MediaAsset) -> NormalizedAsset:
 
     Returns NormalizedAsset with properties that reflect the decoded/processed
     state after applying all necessary filters.
+    Uses PyAV (av library) for structured media probing.
     """
     _validate_no_network_paths(asset.uri)
 
-    # Probe the media file
-    probe_cmd = [*FFMPEG_NETWORK_SAFE, "-v", "error", "-show_entries",
-                 "stream=index,codec_type,width,height,r_frame_rate,avg_frame_rate,pix_fmt,color_transfer,side_data_list",
-                 "-show_entries", "format=duration",
-                 "-of", "json", str(asset.uri)]
+    # Check if this is a still image asset - use asset kind to determine
+    if asset.kind == "image":
+        return _normalize_still_image(asset)
 
-    result = subprocess.run(probe_cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"FFprobe failed for {asset.uri}: {result.stderr}")
-
-    import json
-    probe_data = json.loads(result.stdout)
+    # Probe the media file using PyAV
+    probe_data = _parse_av_probe(Path(asset.uri))
 
     # Extract video stream info
     video_stream = None
@@ -91,7 +243,27 @@ def normalize_asset(asset: MediaAsset) -> NormalizedAsset:
             audio_stream = stream
 
     if video_stream is None:
-        # Still image case
+        # No video stream - this is an audio-only asset
+        if audio_stream is not None:
+            # Audio-only asset
+            duration_ms = int(float(probe_data.get("format", {}).get("duration", 0)) * 1000)
+            return NormalizedAsset(
+                path=Path(asset.uri),
+                duration_ms=duration_ms,
+                width=0,
+                height=0,
+                fps=0,
+                has_audio=True,
+                audio_sample_rate=int(audio_stream.get("sample_rate", 0)),
+                audio_channels=int(audio_stream.get("channels", 0)),
+                needs_rotation=False,
+                is_hdr=False,
+                is_10bit=False,
+                needs_deinterlace=False,
+                needs_even_dimensions=False,
+                is_still_image=False,
+            )
+        # No video stream and no audio stream - treat as still image
         return _normalize_still_image(asset)
 
     # Video asset normalization
@@ -118,28 +290,28 @@ def normalize_asset(asset: MediaAsset) -> NormalizedAsset:
     color_transfer = video_stream.get("color_transfer", "")
 
     is_10bit = any(x in pix_fmt for x in ["10", "12", "16"]) and "rgb" not in pix_fmt.lower()
-    is_hdr = color_transfer in ["arib-std-b67", "smpte2084", "smpte2084", "bt2020-10", "bt2020-12"]
+    is_hdr = color_transfer in ["arib-std-b67", "smpte2084", "bt2020-10", "bt2020-12"]
 
     # Rotation detection
     needs_rotation = False
-    display_matrix = video_stream.get("side_data_list", [])
-    for side_data in display_matrix:
-        if side_data.get("side_data_type") == "Display Matrix":
-            # Check for rotation in display matrix
-            rotation = side_data.get("rotation", 0)
-            if rotation != 0:
-                needs_rotation = True
-                break
-        elif side_data.get("side_data_type") == "Rotation":
-            rotation = int(side_data.get("rotation", 0))
-            if rotation != 0:
-                needs_rotation = True
-                break
-
     # Check for rotate tag in format tags
     rotate_tag = probe_data.get("format", {}).get("tags", {}).get("rotate")
     if rotate_tag and rotate_tag != "0":
         needs_rotation = True
+
+    # Check side data for rotation
+    for stream in probe_data.get("streams", []):
+        for side_data in stream.get("side_data_list", []):
+            if side_data.get("side_data_type") == "Display Matrix":
+                rotation = side_data.get("rotation", 0)
+                if rotation != 0:
+                    needs_rotation = True
+                    break
+            elif side_data.get("side_data_type") == "Rotation":
+                rotation = int(side_data.get("rotation", 0))
+                if rotation != 0:
+                    needs_rotation = True
+                    break
 
     # Interlaced detection
     field_order = video_stream.get("field_order", "progressive")
@@ -178,20 +350,17 @@ def _normalize_still_image(asset: MediaAsset) -> NormalizedAsset:
     """Handle still image normalization."""
     _validate_no_network_paths(asset.uri)
 
-    # Probe image to get dimensions
-    probe_cmd = [*FFMPEG_NETWORK_SAFE, "-v", "error", "-show_entries",
-                 "stream=width,height", "-of", "json", str(asset.uri)]
+    # Probe image to get dimensions using PyAV
+    probe_data = _parse_av_probe(Path(asset.uri))
 
-    result = subprocess.run(probe_cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"FFprobe failed for image {asset.uri}: {result.stderr}")
+    video_stream = None
+    for stream in probe_data.get("streams", []):
+        if stream.get("codec_type") == "video":
+            video_stream = stream
+            break
 
-    import json
-    probe_data = json.loads(result.stdout)
-
-    video_stream = probe_data.get("streams", [{}])[0]
-    width = int(video_stream.get("width", 0))
-    height = int(video_stream.get("height", 0))
+    width = int(video_stream.get("width", 0)) if video_stream else 0
+    height = int(video_stream.get("height", 0)) if video_stream else 0
 
     # Default duration will be set by timeline
     return NormalizedAsset(

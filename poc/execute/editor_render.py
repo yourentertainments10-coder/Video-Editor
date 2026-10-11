@@ -103,23 +103,9 @@ def _resolve_media_path(rel_path: str, base_dir: Path) -> Path:
 
 
 def _probe_media(path: Path) -> dict:
-    """Probe media file using FFmpeg and return JSON metadata."""
-    _validate_no_network_paths(str(path))
-
-    cmd = [*FFMPEG_NETWORK_SAFE, "-v", "error", "-show_entries",
-           "format=duration",
-           "-show_entries", "stream=index,codec_type,width,height,r_frame_rate,avg_frame_rate,pix_fmt,color_transfer,field_order,sample_rate,channels,side_data_list",
-           "-show_entries", "stream_tags=rotate",
-           "-of", "json", str(path)]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise MediaProbeError(f"FFprobe failed for {path}: {result.stderr}")
-
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        raise MediaProbeError(f"Failed to parse FFprobe output for {path}: {e}") from e
+    """Probe media file using PyAV and return structured metadata."""
+    from poc.ingest.normalize import _parse_av_probe
+    return _parse_av_probe(Path(path))
 
 
 @dataclass(frozen=True)
@@ -323,20 +309,22 @@ class EditorRenderer:
 
         # Normalize each asset
         for asset_id in used_asset_ids:
-            asset = library.get_asset(asset_id)
-            if asset is None:
+            project_asset = library.asset(asset_id)
+            if project_asset is None:
                 raise TimelineInvalidError(f"Asset {asset_id} not found in library")
+            asset = project_asset.media_asset
 
             _validate_no_network_paths(asset.uri)
 
             # Probe and normalize asset
             probe_data = _probe_media(Path(asset.uri))
+            video_stream = _get_video_stream_info(probe_data)
             normalized_assets[asset_id] = {
                 "uri": asset.uri,
                 "probe_data": probe_data,
                 "duration_ms": _get_asset_duration(probe_data),
-                "width": _get_video_stream_info(probe_data, {}).get("width", 0) if _get_video_stream_info(probe_data) else 0,
-                "height": _get_video_stream_info(probe_data, {}).get("height", 0) if _get_video_stream_info(probe_data) else 0,
+                "width": video_stream.get("width", 0) if video_stream else 0,
+                "height": video_stream.get("height", 0) if video_stream else 0,
             }
 
         # Build segment instructions in timeline order
@@ -352,6 +340,14 @@ class EditorRenderer:
             normalize_filter = _build_normalize_filter(asset_info["probe_data"])
             segment_filter = _build_segment_filter(asset_info["probe_data"], settings)
 
+            # Check for unsupported features (Step 3c+)
+            if clip.effects:
+                raise NotImplementedError("P2.6 step 3c+: effects rendering not yet implemented")
+            if clip.transition:
+                raise NotImplementedError("P2.6 step 3c+: transitions rendering not yet implemented")
+            if clip.audio:
+                raise NotImplementedError("P2.6 step 3c+: audio rendering not yet implemented")
+
             instruction = {
                 "clip_id": clip.clip_id,
                 "asset_id": clip.asset_id,
@@ -360,14 +356,10 @@ class EditorRenderer:
                 "duration_s": (source_out_s - source_in_s),
                 "normalize_filter": normalize_filter,
                 "segment_filter": segment_filter,
-                "effects": [effect.effect_id for effect in clip.effects] if clip.effects else [],
-                "transition": clip.transition.transition_id if clip.transition else None,
-                "transition_duration": clip.transition.duration_ticks / settings.fps if clip.transition else 0,
-                "audio": {
-                    "gain_db": clip.audio.gain_db if clip.audio else 0,
-                    "fade_in_ms": clip.audio.fade_in_ms if clip.audio else 0,
-                    "fade_out_ms": clip.audio.fade_out_ms if clip.audio else 0,
-                } if clip.audio else None
+                "effects": [],
+                "transition": None,
+                "transition_duration": 0,
+                "audio": None
             }
             segment_instructions.append(instruction)
 
