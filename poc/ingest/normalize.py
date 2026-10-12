@@ -47,160 +47,122 @@ def _validate_no_network_paths(*paths: str) -> None:
             )
 
 
+def _exif_orientation(path: str | Path) -> int:
+    """Return a local image's EXIF orientation, defaulting safely to 1."""
+    try:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            orientation = int(image.getexif().get(0x0112, 1))
+        return orientation if orientation in range(1, 9) else 1
+    except ImportError:
+        import struct
+
+        try:
+            data = Path(path).read_bytes()
+            if not data.startswith(b"\xff\xd8"):
+                return 1
+            offset = 2
+            while offset + 4 <= len(data):
+                if data[offset] != 0xFF:
+                    break
+                marker = data[offset + 1]
+                length = int.from_bytes(data[offset + 2:offset + 4], "big")
+                payload = data[offset + 4:offset + 2 + length]
+                if marker == 0xE1 and payload.startswith(b"Exif\0\0"):
+                    tiff = payload[6:]
+                    endian = "<" if tiff[:2] == b"II" else ">" if tiff[:2] == b"MM" else None
+                    if endian is None:
+                        return 1
+                    ifd = struct.unpack_from(endian + "I", tiff, 4)[0]
+                    entries = struct.unpack_from(endian + "H", tiff, ifd)[0]
+                    for index in range(entries):
+                        entry = ifd + 2 + index * 12
+                        tag, kind, count = struct.unpack_from(endian + "HHI", tiff, entry)
+                        if tag == 0x0112 and kind == 3 and count >= 1:
+                            value = struct.unpack_from(endian + "H", tiff, entry + 8)[0]
+                            return value if value in range(1, 9) else 1
+                    return 1
+                if marker in (0xDA, 0xD9):
+                    break
+                offset += 2 + length
+        except (OSError, ValueError, struct.error):
+            pass
+        return 1
+    except (OSError, ValueError, TypeError):
+        return 1
+
+
 def _parse_av_probe(path: Path) -> dict:
     """Probe media file using PyAV and return structured metadata.
 
     Returns a dict with the same structure as ffprobe JSON would have.
     """
-    # Use PyAV to open and probe the file
-    container = av.open(str(path))
-
-    result = {
-        "format": {"duration": "0", "tags": {}},
-        "streams": []
-    }
-
-    # Format duration - av.duration is in microseconds (AV_TIME_BASE = 1,000,000)
-    if container.duration is not None:
-        duration_seconds = container.duration / 1_000_000
-        result["format"]["duration"] = str(duration_seconds)
-
-    # Format tags (rotation, etc.)
-    if container.metadata:
-        for key, value in container.metadata.items():
+    result = {"format": {"duration": "0", "tags": {}}, "streams": []}
+    with av.open(str(path)) as container:
+        if container.duration is not None:
+            result["format"]["duration"] = str(container.duration / 1_000_000)
+        for key, value in (container.metadata or {}).items():
             if key.lower() == "rotate":
                 result["format"]["tags"]["rotate"] = str(value)
 
-    # Parse streams
-    for stream in container.streams:
-        if stream.type == "video":
-            video_stream = {
-                "codec_type": "video",
-                "width": stream.width,
-                "height": stream.height,
-                "pix_fmt": str(stream.pix_fmt),
-            }
-
-            # Frame rate - use average_rate and guessed_rate
-            if stream.average_rate:
-                video_stream["avg_frame_rate"] = f"{stream.average_rate.numerator}/{stream.average_rate.denominator}"
-            else:
-                video_stream["avg_frame_rate"] = "0/0"
-
-            # r_frame_rate - use guessed_rate if available
-            if stream.guessed_rate:
-                video_stream["r_frame_rate"] = f"{stream.guessed_rate.numerator}/{stream.guessed_rate.denominator}"
-            else:
-                video_stream["r_frame_rate"] = "0/0"
-
-            # Color transfer / HDR detection - from codec context
-            ctx = stream.codec_context
-            color_transfer = ""
-            if hasattr(ctx, "color_trc") and ctx.color_trc is not None:
-                # Map FFmpeg color_trc enum values to string names
+        for stream in container.streams:
+            if stream.type == "video":
+                ctx = stream.codec_context
+                video_stream = {
+                    "codec_type": "video", "width": stream.width,
+                    "height": stream.height, "pix_fmt": str(ctx.pix_fmt),
+                    "avg_frame_rate": (
+                        f"{stream.average_rate.numerator}/{stream.average_rate.denominator}"
+                        if stream.average_rate else "0/0"
+                    ),
+                    "r_frame_rate": (
+                        f"{stream.guessed_rate.numerator}/{stream.guessed_rate.denominator}"
+                        if stream.guessed_rate else "0/0"
+                    ),
+                }
                 color_trc_map = {
-                    1: "bt709",          # BT.709 / sRGB
-                    14: "bt2020-10",     # BT.2020 non-constant peak
-                    15: "bt2020-12",     # BT.2020 constant peak
-                    16: "smpte2084",     # PQ (SMPTE ST 2084)
-                    18: "arib-std-b67",  # HLG (ARIB STD-B67)
+                    1: "bt709", 14: "bt2020-10", 15: "bt2020-12",
+                    16: "smpte2084", 18: "arib-std-b67",
                 }
-                color_trc_val = ctx.color_trc
-                video_stream["color_transfer"] = color_trc_map.get(color_trc_val, str(color_trc_val))
-
-            # Color primaries
-            if hasattr(ctx, "color_primaries") and ctx.color_primaries is not None:
-                video_stream["color_primaries"] = str(ctx.color_primaries)
-
-            # Field order (interlaced detection)
-            if hasattr(ctx, "field_order") and ctx.field_order is not None:
-                field_order_map = {
-                    0: "progressive",
-                    1: "tt",      # top coded first, top displayed first
-                    2: "bb",      # bottom coded first, bottom displayed first
-                    3: "tb",      # top coded first, bottom displayed first
-                    4: "bt",      # bottom coded first, top displayed first
-                }
-                field_order_val = ctx.field_order
-                video_stream["field_order"] = field_order_map.get(field_order_val, "progressive")
-            else:
-                video_stream["field_order"] = "progressive"
-
-            # Sample aspect ratio
-            if hasattr(ctx, "sample_aspect_ratio") and ctx.sample_aspect_ratio is not None:
-                sar = ctx.sample_aspect_ratio
-                video_stream["sample_aspect_ratio"] = f"{sar.numerator}:{sar.denominator}"
-            else:
-                video_stream["sample_aspect_ratio"] = "1:1"
-
-            # Pixel format from codec context
-            video_stream["pix_fmt"] = str(ctx.pix_fmt)
-
-            # Side data (for rotation detection)
-            side_data_list = []
-            # Check stream metadata for rotation
-            if hasattr(stream, "metadata") and stream.metadata:
-                for key, value in stream.metadata.items():
+                if getattr(ctx, "color_trc", None) is not None:
+                    video_stream["color_transfer"] = color_trc_map.get(
+                        ctx.color_trc, str(ctx.color_trc)
+                    )
+                if getattr(ctx, "color_primaries", None) is not None:
+                    video_stream["color_primaries"] = str(ctx.color_primaries)
+                field_order_map = {0: "progressive", 1: "progressive", 2: "tt", 3: "bb", 4: "tb", 5: "bt"}
+                video_stream["field_order"] = field_order_map.get(
+                    getattr(ctx, "field_order", 0), "progressive"
+                )
+                sar = getattr(stream, "sample_aspect_ratio", None)
+                video_stream["sample_aspect_ratio"] = (
+                    f"{sar.numerator}:{sar.denominator}" if sar else "1:1"
+                )
+                side_data_list = []
+                for key, value in (stream.metadata or {}).items():
                     if key.lower() == "rotate":
-                        side_data_list.append({
-                            "side_data_type": "Rotation",
-                            "rotation": int(value)
-                        })
-
-            # Parse the coded display matrix (9 signed 32-bit fixed-point values).
-            if hasattr(ctx, "coded_side_data"):
-                csd = ctx.coded_side_data
-                if isinstance(csd, dict) and "display_matrix" in csd:
-                    import math
-                    import struct
-                    try:
-                        raw_bytes = csd["display_matrix"]
-                        if len(raw_bytes) >= 36:
-                            matrix = struct.unpack("<9i", raw_bytes[:36])
-                            angle = round(math.degrees(math.atan2(matrix[3], matrix[0]))) % 360
-                            if angle in (90, 180, 270):
-                                side_data_list.append({
-                                    "side_data_type": "Display Matrix",
-                                    "rotation": angle,
-                                })
-                    except (TypeError, ValueError, struct.error):
-                        pass
-
-            video_stream["side_data_list"] = side_data_list
-
-            # Frame rate
-            if stream.average_rate:
-                video_stream["avg_frame_rate"] = f"{stream.average_rate.numerator}/{stream.average_rate.denominator}"
-            else:
-                video_stream["avg_frame_rate"] = "0/0"
-
-            if stream.guessed_rate:
-                video_stream["r_frame_rate"] = f"{stream.guessed_rate.numerator}/{stream.guessed_rate.denominator}"
-            else:
-                video_stream["r_frame_rate"] = "0/0"
-
-            result["streams"].append(video_stream)
-
-        elif stream.type == "audio":
-            audio_stream = {
-                "codec_type": "audio",
-                "channels": stream.channels,
-                "sample_rate": str(stream.sample_rate),
-            }
-            result["streams"].append(audio_stream)
-
-    # Format duration - av.duration is in microseconds (AV_TIME_BASE = 1,000,000)
-    if container.duration is not None:
-        duration_seconds = container.duration / 1_000_000
-        result["format"]["duration"] = str(duration_seconds)
-
-    # Format tags from container metadata
-    if container.metadata:
-        for key, value in container.metadata.items():
-            if key.lower() == "rotate":
-                result["format"]["tags"]["rotate"] = str(value)
-
-    container.close()
+                        side_data_list.append({"side_data_type": "Rotation", "rotation": int(value)})
+                if hasattr(ctx, "coded_side_data"):
+                    csd = ctx.coded_side_data
+                    if isinstance(csd, dict) and "display_matrix" in csd:
+                        import struct
+                        try:
+                            raw_bytes = csd["display_matrix"]
+                            if len(raw_bytes) >= 36:
+                                matrix = struct.unpack("<9i", raw_bytes[:36])
+                                angle = round(math.degrees(math.atan2(matrix[3], matrix[0]))) % 360
+                                if angle in (90, 180, 270):
+                                    side_data_list.append({"side_data_type": "Display Matrix", "rotation": angle})
+                        except (TypeError, ValueError, struct.error):
+                            pass
+                video_stream["side_data_list"] = side_data_list
+                result["streams"].append(video_stream)
+            elif stream.type == "audio":
+                result["streams"].append({
+                    "codec_type": "audio", "channels": stream.channels,
+                    "sample_rate": str(stream.sample_rate),
+                })
     return result
 
 
@@ -381,6 +343,9 @@ def _normalize_still_image(asset: MediaAsset) -> NormalizedAsset:
 
     width = int(video_stream.get("width", 0)) if video_stream else 0
     height = int(video_stream.get("height", 0)) if video_stream else 0
+    orientation = _exif_orientation(asset.uri)
+    if orientation in (5, 6, 7, 8):
+        width, height = height, width
 
     # Default duration will be set by timeline
     return NormalizedAsset(
@@ -410,6 +375,19 @@ def build_normalize_filter(asset: NormalizedAsset) -> str:
     Returns a filtergraph string suitable for -vf.
     """
     filters = []
+
+    if asset.is_still_image:
+        orientation = _exif_orientation(asset.path)
+        orientation_filters = {
+            2: ["hflip"],
+            3: ["hflip", "vflip"],
+            4: ["vflip"],
+            5: ["transpose=1", "hflip"],
+            6: ["transpose=1"],
+            7: ["transpose=1", "vflip"],
+            8: ["transpose=2"],
+        }
+        filters.extend(orientation_filters.get(orientation, []))
 
     # 1. Handle interlaced -> progressive (must come first)
     if asset.needs_deinterlace:
@@ -475,8 +453,7 @@ def build_normalize_filter(asset: NormalizedAsset) -> str:
     # 8. Format conversion (ensure yuv420p for compatibility)
     filters.append("format=yuv420p")
 
-    # Note: Rotation is handled by FFmpeg auto-rotate on decode (display-matrix/side data),
-    # so we do NOT add transpose here (would rotate twice).
+    # Video display-matrix rotation is applied by FFmpeg during decode.
     # Note: FPS conversion for CFR is handled by the caller via -r <fps> or fps=<fps> filter
     # if needed; this normalize step does not change frame rate.
 
@@ -578,9 +555,18 @@ def normalize_to_file(asset: MediaAsset, out_path: Path, fps: int = 30) -> Path:
     cmd.append(str(out_path))
 
     # Run FFmpeg
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg failed: {result.stderr}")
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_path = out_path.with_name(f"{out_path.stem}.{os.getpid()}.partial{out_path.suffix}")
+    cmd[-1] = str(partial_path)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg failed: {result.stderr}")
+        os.replace(partial_path, out_path)
+    except BaseException:
+        partial_path.unlink(missing_ok=True)
+        raise
 
     return out_path
 
@@ -592,18 +578,27 @@ def _normalize_still_image_to_file(asset: MediaAsset, out_path: Path, fps: int) 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:],
+        FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:], "-noautorotate",
         "-loop", "1", "-framerate", str(fps), "-t", str(duration),
         "-i", str(asset.uri),
         "-vf", build_normalize_filter(normalized),
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
         "-colorspace", "bt709", "-color_primaries", "bt709",
         "-color_trc", "bt709", "-color_range", "tv",
-        "-movflags", "+faststart", str(out_path),
+        "-movflags", "+faststart",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg failed: {result.stderr}")
+    partial_path = out_path.with_name(
+        f"{out_path.stem}.{os.getpid()}.partial{out_path.suffix}"
+    )
+    cmd.append(str(partial_path))
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg failed: {result.stderr}")
+        os.replace(partial_path, out_path)
+    except BaseException:
+        partial_path.unlink(missing_ok=True)
+        raise
     return out_path
 
 
@@ -640,6 +635,23 @@ def ken_burns_to_file(
         if image is None:
             raise ValueError(f"Image contains no decodable video frame: {asset.uri}")
         source_rgb = image.to_ndarray(format="rgb24")
+
+    orientation = _exif_orientation(asset.uri)
+    if orientation == 2:
+        source_rgb = source_rgb[:, ::-1]
+    elif orientation == 3:
+        source_rgb = source_rgb[::-1, ::-1]
+    elif orientation == 4:
+        source_rgb = source_rgb[::-1]
+    elif orientation == 5:
+        source_rgb = np.rot90(source_rgb, k=3)[:, ::-1]
+    elif orientation == 6:
+        source_rgb = np.rot90(source_rgb, k=3)
+    elif orientation == 7:
+        source_rgb = np.rot90(source_rgb, k=3)[::-1]
+    elif orientation == 8:
+        source_rgb = np.rot90(source_rgb, k=1)
+    source_rgb = np.ascontiguousarray(source_rgb)
 
     # Resize to a 2x cover canvas first. This leaves room for zooming in while
     # preserving the requested output aspect ratio at every frame.

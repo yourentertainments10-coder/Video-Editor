@@ -28,7 +28,8 @@ PROXY_CRF = 28
 @lru_cache(maxsize=1)
 def _ffmpeg_version() -> str:
     result = subprocess.run(
-        [FFMPEG_EXE, "-version"], capture_output=True, text=True, check=True
+        [FFMPEG_EXE, *FFMPEG_NETWORK_SAFE[1:], "-version"],
+        capture_output=True, text=True, check=True,
     )
     return result.stdout.splitlines()[0] if result.stdout else "unknown"
 
@@ -85,6 +86,7 @@ def _duration_seconds(asset: MediaAsset, normalized) -> float:
 def _input_args(asset: MediaAsset, duration: float, *, still_loop: bool) -> list[str]:
     args = list(FFMPEG_NETWORK_SAFE[1:])
     if asset.kind == "image" and still_loop:
+        args.append("-noautorotate")
         args.extend(["-loop", "1", "-framerate", str(PROXY_FPS), "-t", str(duration)])
     args.extend(["-i", str(asset.uri)])
     return args
@@ -185,7 +187,7 @@ def make_thumbnails(
         )
         cmd = [FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:]]
         if asset.kind == "image":
-            cmd.extend(["-i", str(asset.uri)])
+            cmd.extend(["-noautorotate", "-i", str(asset.uri)])
         else:
             cmd.extend(["-ss", f"{timestamp:.6f}", "-i", str(asset.uri)])
         cmd.extend([

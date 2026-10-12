@@ -11,6 +11,7 @@ from poc.ingest.normalize import (
     FFMPEG_EXE,
     FFMPEG_NETWORK_SAFE,
     _validate_no_network_paths,
+    build_normalize_filter,
     normalize_asset,
 )
 from poc.timeline import MediaAsset
@@ -67,6 +68,21 @@ def build_fit_filter(src_w: int, src_h: int, width: int, height: int,
     )
 
 
+def fit_graph_for(
+    asset: MediaAsset,
+    width: int,
+    height: int,
+    mode: str,
+    focus: tuple[float, float],
+) -> str:
+    """Build an input graph that normalizes the source before fitting it."""
+    normalized = normalize_asset(asset)
+    _validate_fit_args(normalized.width, normalized.height, width, height, mode, focus)
+    fit = build_fit_filter(normalized.width, normalized.height, width, height, mode, focus)
+    normalization = build_normalize_filter(normalized)
+    return fit.replace("[0:v]", f"[0:v]{normalization},", 1)
+
+
 def fit_to_frame_to_file(
     asset: MediaAsset,
     out_path: Path,
@@ -74,23 +90,24 @@ def fit_to_frame_to_file(
     height: int = 1920,
     mode: str = "cover",
     focus: tuple[float, float] = (0.5, 0.5),
+    fps: int = 30,
 ) -> Path:
     """Encode a fitted video with optional blurred bands or subject framing."""
     if asset.uri is None:
         raise ValueError("Media asset must have a local URI")
     _validate_no_network_paths(asset.uri)
     normalized = normalize_asset(asset)
+    if fps <= 0:
+        raise ValueError("Output frame rate must be positive")
     _validate_fit_args(normalized.width, normalized.height, width, height, mode, focus)
-    graph = build_fit_filter(normalized.width, normalized.height, width, height, mode, focus)
+    graph = fit_graph_for(asset, width, height, mode, focus)
     if asset.kind == "image":
         duration_ms = asset.duration_ms or 5000
-        input_args = ["-loop", "1", "-framerate", "30", "-t", str(duration_ms / 1000),
+        input_args = ["-noautorotate", "-loop", "1", "-framerate", str(fps), "-t", str(duration_ms / 1000),
                       "-i", asset.uri]
-        fps = 30
     else:
         duration_ms = normalized.duration_ms
         input_args = ["-i", asset.uri]
-        fps = max(1, round(normalized.fps))
     if duration_ms <= 0:
         raise ValueError("Media asset duration must be known")
 

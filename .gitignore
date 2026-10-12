@@ -29,4 +29,5 @@ tests/fixtures/ingest/
 # Test reports
 pytest_full.txt
 pytest_report.xml
+pytest_*.txt
 git_*.txt

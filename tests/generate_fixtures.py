@@ -8,7 +8,7 @@ Creates real media files matching RENDER_SPEC §2 requirements:
 - Odd-size + non-square SAR clip (even dims for encoder)
 - Interlaced clip
 - 5.1 audio file
-- PNG with EXIF rotation
+- plain PNG image
 - Unicode path test
 - Long path test (> 240 chars)
 """
@@ -19,6 +19,7 @@ from pathlib import Path
 import imageio_ffmpeg
 
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
+FAILED_FIXTURES = []
 
 
 def run_ffmpeg(args, description):
@@ -28,6 +29,7 @@ def run_ffmpeg(args, description):
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  ERROR: {result.stderr}")
+        FAILED_FIXTURES.append(description)
         return False
     return True
 
@@ -91,6 +93,7 @@ def main():
         "-color_trc", "smpte2084",  # PQ transfer (16)
         "-color_primaries", "bt2020", # BT.2020
         "-colorspace", "bt2020nc",
+        "-bsf:v", "h264_metadata=colour_primaries=9:transfer_characteristics=16:matrix_coefficients=9",
         str(hdr_path)
     ], "HDR 10-bit (PQ) clip")
 
@@ -109,6 +112,7 @@ def main():
         "-f", "lavfi", "-i", "color=c=magenta:s=640x480:r=30:d=2",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-vf", "tinterlace=4",  # make interlaced
+        "-flags", "+ilme+ildct", "-x264-params", "tff=1",
         "-field_order", "tt",  # top field first
         str(interlaced_path)
     ], "interlaced clip")
@@ -127,13 +131,40 @@ def main():
         "-c:a", "pcm_s16le", str(audio_51_path)
     ], "5.1 audio file")
 
-    # 7. PNG with EXIF rotation
+    # 7. Plain PNG image (PNG does not carry the EXIF orientation fixture).
     png_rotated_path = fixtures_dir / "rotated_exif.png"
     run_ffmpeg([
         "-f", "lavfi", "-i", "color=c=red:s=640x480",
         "-frames:v", "1",
         str(png_rotated_path)
     ], "PNG image")
+
+    # EXIF-oriented JPEG used by still-image normalization tests.
+    exif_fixture_code = (
+        "from PIL import Image; from pathlib import Path; "
+        "img=Image.new('RGB',(640,480),(255,0,0)); "
+        "img.paste((0,0,255),(320,0,640,480)); "
+        "exif=Image.Exif(); exif[0x0112]=6; "
+        "img.save(Path(__import__('sys').argv[1]),exif=exif,quality=95)"
+    )
+    try:
+        from PIL import Image
+        img = Image.new("RGB", (640, 480), (255, 0, 0))
+        img.paste((0, 0, 255), (320, 0, 640, 480))
+        exif = Image.Exif()
+        exif[0x0112] = 6
+        img.save(fixtures_dir / "exif_rot6.jpg", exif=exif, quality=95)
+    except ImportError:
+        result = subprocess.run(
+            ["python", "-c", exif_fixture_code, str(fixtures_dir / "exif_rot6.jpg")],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            FAILED_FIXTURES.append("EXIF orientation JPEG")
+            print(f"  ERROR generating EXIF orientation JPEG: {result.stderr}")
+    except Exception as exc:
+        FAILED_FIXTURES.append("EXIF orientation JPEG")
+        print(f"  ERROR generating EXIF orientation JPEG: {exc}")
 
     # 8. Unicode path - create directory with unicode name
     unicode_dir = fixtures_dir / "测试视频文件夹"
@@ -203,6 +234,14 @@ def main():
         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(marker_path)
     ], "left marker for vertical fit tests")
 
+    # 14. Solid-color clips for centered-cut transition tests.
+    for color in ("red", "green", "blue"):
+        run_ffmpeg([
+            "-f", "lavfi", "-i", f"color=c={color}:s=640x360:r=30:d=4",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            str(fixtures_dir / f"solid_{color}.mp4"),
+        ], f"solid {color} transition fixture")
+
     print(f"\nDone! Fixtures created in {fixtures_dir}")
     for f in fixtures_dir.rglob("*"):
         if f.is_file():
@@ -214,6 +253,12 @@ def main():
             except UnicodeEncodeError:
                 # Fallback for Unicode characters that can't be displayed
                 print(f"  [Unicode filename]: {size} bytes")
+
+    if FAILED_FIXTURES:
+        print("\nFailed fixtures:")
+        for name in FAILED_FIXTURES:
+            print(f"  - {name}")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

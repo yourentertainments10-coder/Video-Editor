@@ -70,3 +70,13 @@ def test_safe_area_warnings():
     assert len(safe_area_warnings([(1000, 800, 70, 100)])) == 1
     with pytest.raises(ValueError):
         safe_area_warnings([], profile="nope")
+
+from poc.render.aspect import fit_graph_for
+
+def test_fit_graph_runs_normalize_chain_first():
+    hdr = MediaAsset(asset_id="h", kind="video", uri=str(FIX/"hdr_10bit.mp4"), duration_ms=2000)
+    il = MediaAsset(asset_id="i", kind="video", uri=str(FIX/"interlaced.mp4"), duration_ms=2000)
+    g1 = fit_graph_for(hdr, 1080, 1920, "cover", (0.5, 0.5))
+    g2 = fit_graph_for(il, 1080, 1920, "cover", (0.5, 0.5))
+    assert "tonemap" in g1 and g1.index("tonemap") < g1.index("crop")
+    assert "bwdif" in g2 and g2.index("bwdif") < g2.index("crop")
