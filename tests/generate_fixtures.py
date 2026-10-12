@@ -16,8 +16,9 @@ Creates real media files matching RENDER_SPEC §2 requirements:
 import subprocess
 import sys
 from pathlib import Path
+import imageio_ffmpeg
 
-FFMPEG = "D:\\Python\\video editor\\.venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe"
+FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 
 
 def run_ffmpeg(args, description):
@@ -47,15 +48,31 @@ def main():
         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(vfr_path)
     ], "VFR clip")
 
-    # 2. 90° rotated clip (using display rotation metadata - INPUT SIDE)
-    # Re-encode to 480x640 (portrait) to match intended displayed output
+    # 2. 90° rotated clip (using display rotation metadata)
+    # First create a plain clip, then apply display rotation and copy
+    plain_clip = fixtures_dir / "plain_clip.mp4"
     rotated_path = fixtures_dir / "rotated_90.mp4"
+
+    # Create plain clip first
     run_ffmpeg([
-        "-display_rotation", "90",  # INPUT side rotation
         "-f", "lavfi", "-i", "color=c=yellow:s=640x480:r=30:d=2",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        str(plain_clip)
+    ], "plain clip for rotation test")
+
+    # Apply display rotation and copy (no re-encoding)
+    run_ffmpeg([
+        "-display_rotation", "90",
+        "-i", str(plain_clip),
+        "-c", "copy",
         str(rotated_path)
     ], "90° rotated clip (display rotation)")
+
+    # Clean up plain clip
+    try:
+        plain_clip.unlink()
+    except:
+        pass
 
     # 3. HDR 10-bit clip (PQ tagged)
     hdr_path = fixtures_dir / "hdr_10bit.mp4"
@@ -132,6 +149,15 @@ def main():
         str(long_path)
     ], "long path clip")
 
+    # 10. 720x480 with SAR 32:27 fixture
+    sar_32_27_path = fixtures_dir / "sar_32_27.mp4"
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "color=c=orange:s=720x480:r=30:d=2",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-vf", "setsar=32/27",
+        str(sar_32_27_path)
+    ], "720x480 SAR 32:27 fixture")
+
     # Also generate a simple still image for still image test
     still_png = fixtures_dir / "still_image.png"
     run_ffmpeg([
@@ -144,7 +170,13 @@ def main():
     for f in fixtures_dir.rglob("*"):
         if f.is_file():
             size = f.stat().st_size
-            print(f"  {f.relative_to(fixtures_dir)}: {size} bytes")
+            # Handle Unicode characters in filenames for Windows console
+            rel_path = f.relative_to(fixtures_dir)
+            try:
+                print(f"  {rel_path}: {size} bytes")
+            except UnicodeEncodeError:
+                # Fallback for Unicode characters that can't be displayed
+                print(f"  [Unicode filename]: {size} bytes")
 
 
 if __name__ == "__main__":

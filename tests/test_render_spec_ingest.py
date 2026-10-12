@@ -209,6 +209,59 @@ def test_still_image_handling():
     assert "setsar=1" in filter_str
 
 
+def test_720x480_sar_32_27_handling():
+    """Test that 720x480 with SAR 32:27 is handled correctly."""
+    # Create a fixture with 720x480 and SAR 32:27 if it doesn't exist
+    sar_32_27_path = FIXTURES_DIR / "sar_32_27.mp4"
+    if not sar_32_27_path.exists():
+        # Generate it using FFmpeg
+        import subprocess
+        FFMPEG = ".venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe"
+        subprocess.run([
+            FFMPEG, "-y",
+            "-f", "lavfi", "-i", "color=c=orange:s=720x480:r=30:d=2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-vf", "setsar=32/27",
+            str(sar_32_27_path)
+        ], check=True, capture_output=True)
+
+    assert sar_32_27_path.exists(), "SAR 32:27 fixture not found"
+
+    asset = MediaAsset(
+        asset_id="sar-32-27-test",
+        kind="video",
+        uri=str(sar_32_27_path),
+        duration_ms=2000
+    )
+
+    normalized = normalize_asset(asset)
+
+    # Input is 720x480 with SAR 32:27
+    assert normalized.width == 720
+    assert normalized.height == 480
+    assert normalized.sample_aspect_ratio == "32:27"
+
+    # Test normalization and transcode to verify output
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        out_path = Path(tmp_dir) / "sar_32_27_normalized.mp4"
+        normalize_to_file(asset, out_path, fps=30)
+
+        # Probe the output with PyAV
+        import av
+        container = av.open(str(out_path))
+        video_stream = next(s for s in container.streams if s.type == "video")
+        # After applying SAR 32:27, 720 * (32/27) = 853.33 -> should be ~853 or 854
+        # After making even dimensions for encoding
+        assert video_stream.width in [852, 854]  # Could be 852 or 854 depending on rounding
+        assert video_stream.height == 480  # Height unchanged
+        # SAR should be 1:1 (square pixels) in output
+        assert video_stream.sample_aspect_ratio.numerator == 1
+        assert video_stream.sample_aspect_ratio.denominator == 1
+        # Should be yuv420p 8-bit
+        assert video_stream.pix_fmt == "yuv420p"
+        container.close()
+
+
 def test_normalize_real_vfr_asset():
     """Test normalizing a real VFR asset produces CFR output."""
     vfr_path = FIXTURES_DIR / "vfr_clip.mp4"
@@ -365,7 +418,7 @@ def test_normalize_real_odd_sar_asset():
         # After scale=iw*sar:ih: 639*(4/3) = 852, 479 -> 852x479
         # After making even: trunc(852/2)*2 = 852, trunc(479/2)*2 = 478
         # Expected: 852x478
-        expected_width = 638
+        expected_width = 852
         expected_height = 478
         assert video_stream.width == expected_width
         assert video_stream.height == expected_height
