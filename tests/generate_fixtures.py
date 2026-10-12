@@ -52,6 +52,7 @@ def main():
     # First create a plain clip, then apply display rotation and copy
     plain_clip = fixtures_dir / "plain_clip.mp4"
     rotated_path = fixtures_dir / "rotated_90.mp4"
+    rotated_180_path = fixtures_dir / "rotated_180.mp4"
 
     # Create plain clip first
     run_ffmpeg([
@@ -67,6 +68,14 @@ def main():
         "-c", "copy",
         str(rotated_path)
     ], "90° rotated clip (display rotation)")
+
+    # Keep the coded dimensions and apply a 180° display matrix.
+    run_ffmpeg([
+        "-display_rotation", "180",
+        "-i", str(plain_clip),
+        "-c", "copy",
+        str(rotated_180_path)
+    ], "180° rotated clip (display rotation)")
 
     # Clean up plain clip
     try:

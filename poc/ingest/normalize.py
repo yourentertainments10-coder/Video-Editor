@@ -12,12 +12,9 @@ metadata access.
 
 from __future__ import annotations
 
-import fractions
-import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import av
 import imageio_ffmpeg
@@ -148,70 +145,23 @@ def _parse_av_probe(path: Path) -> dict:
                             "rotation": int(value)
                         })
 
-            # Check for coded_side_data (PyAV exposes side data through codec_context.coded_side_data)
-            if hasattr(stream.codec_context, "coded_side_data"):
-                csd = stream.codec_context.coded_side_data
-                if isinstance(csd, dict) and 'display_matrix' in csd:
-                    # For our test fixture, we know it has a 90° rotation
-                    # Check if we have display_matrix data with non-zero off-diagonal elements
+            # Parse the coded display matrix (9 signed 32-bit fixed-point values).
+            if hasattr(ctx, "coded_side_data"):
+                csd = ctx.coded_side_data
+                if isinstance(csd, dict) and "display_matrix" in csd:
+                    import math
                     import struct
                     try:
-                        raw_bytes = csd['display_matrix']
-                        if len(raw_bytes) >= 36:  # 9 * 4 bytes
-                            matrix = struct.unpack('<9i', raw_bytes[:36])
-                            # Check if any off-diagonal elements are significant (indicating rotation)
-                            # Off-diagonal elements for a 3x3 matrix: [1,2,3,5,6,7]
-                            off_diagonal = [matrix[1], matrix[2], matrix[3], matrix[5], matrix[6], matrix[7]]
-                            # If any off-diagonal element is large (>1000), assume 90° rotation
-                            if any(abs(x) > 1000 for x in off_diagonal):
+                        raw_bytes = csd["display_matrix"]
+                        if len(raw_bytes) >= 36:
+                            matrix = struct.unpack("<9i", raw_bytes[:36])
+                            angle = round(math.degrees(math.atan2(matrix[3], matrix[0]))) % 360
+                            if angle in (90, 180, 270):
                                 side_data_list.append({
                                     "side_data_type": "Display Matrix",
-                                    "rotation": 90
+                                    "rotation": angle,
                                 })
-                    except Exception:
-                        # If we can't parse, continue silently
-                        pass
-
-            # Check for coded_side_data (PyAV exposes side data through codec_context.coded_side_data)
-            if hasattr(stream.codec_context, "coded_side_data"):
-                csd = stream.codec_context.coded_side_data
-                if isinstance(csd, dict) and 'display_matrix' in csd:
-                    # Parse the display matrix to detect rotation
-                    import struct
-                    try:
-                        # Display matrix is 9 int32 values (3x3 matrix) in little-endian format
-                        raw_bytes = csd['display_matrix']
-                        if len(raw_bytes) >= 36:  # 9 * 4 bytes
-                            matrix = struct.unpack('<9i', raw_bytes[:36])
-                            # Check for common rotation values in display matrix
-                            # The display matrix values are fixed-point numbers with 16-bit fractional part
-                            # So 1.0 = 65536, -1.0 = -65536
-                            # 90° clockwise: [0, -1, 0; 1, 0, 0; 0, 0, 1] -> [0, -65536, 0; 65536, 0, 0; 0, 0, 65536]
-                            # 90° counter-clockwise: [0, 1, 0; -1, 0, 0; 0, 0, 1] -> [0, 65536, 0; -65536, 0, 0; 0, 0, 65536]
-                            # 180°: [-1, 0, 0; 0, -1, 0; 0, 0, 1] -> [-65536, 0, 0; 0, -65536, 0; 0, 0, 65536]
-
-                            # Check if this looks like a rotation matrix (simplified check)
-                            if matrix[0] == 0 and matrix[2] == 0 and matrix[6] == 0 and matrix[7] == 0 and abs(matrix[8]) == 65536:
-                                if matrix[1] == -65536 and matrix[3] == 65536:
-                                    # 90 degree clockwise rotation
-                                    side_data_list.append({
-                                        "side_data_type": "Display Matrix",
-                                        "rotation": 90
-                                    })
-                                elif matrix[1] == 65536 and matrix[3] == -65536:
-                                    # 90 degree counter-clockwise rotation
-                                    side_data_list.append({
-                                        "side_data_type": "Display Matrix",
-                                        "rotation": -90
-                                    })
-                                elif matrix[1] == -65536*2 and matrix[3] == 65536*2:
-                                    # 180 degree rotation
-                                    side_data_list.append({
-                                        "side_data_type": "Display Matrix",
-                                        "rotation": 180
-                                    })
-                    except Exception:
-                        # If we can't parse, continue silently
+                    except (TypeError, ValueError, struct.error):
                         pass
 
             video_stream["side_data_list"] = side_data_list
@@ -271,6 +221,7 @@ class NormalizedAsset:
     is_still_image: bool = False
     is_vfr: bool = False
     sample_aspect_ratio: str = "1:1"
+    rotation_degrees: int = 0
 
 
 def normalize_asset(asset: MediaAsset) -> NormalizedAsset:
@@ -348,58 +299,31 @@ def normalize_asset(asset: MediaAsset) -> NormalizedAsset:
     is_10bit = any(x in pix_fmt for x in ["10", "12", "16"]) and "rgb" not in pix_fmt.lower()
     is_hdr = color_transfer in ["arib-std-b67", "smpte2084", "bt2020-10", "bt2020-12"]
 
-    # Rotation detection
-    needs_rotation = False
-    # Check for rotate tag in format tags
+    # Rotation detection. Keep the source display angle and expose display
+    # dimensions, swapping only for quarter turns.
+    rotation_degrees = 0
     rotate_tag = probe_data.get("format", {}).get("tags", {}).get("rotate")
-    if rotate_tag and rotate_tag != "0":
-        needs_rotation = True
+    if rotate_tag:
+        try:
+            rotation_degrees = int(round(float(rotate_tag))) % 360
+        except (TypeError, ValueError):
+            pass
 
-
-    # Check side data for rotation
     for stream in probe_data.get("streams", []):
         for side_data in stream.get("side_data_list", []):
-            if side_data.get("side_data_type") == "Display Matrix":
-                rotation = side_data.get("rotation", 0)
-                if rotation != 0:
-                    needs_rotation = True
-
-                    break
-            elif side_data.get("side_data_type") == "Rotation":
-                rotation = int(side_data.get("rotation", 0))
-                if rotation != 0:
-                    needs_rotation = True
-
-                    break
-
-        # Check for coded_side_data (PyAV exposes side data through codec_context.coded_side_data)
-        if hasattr(stream, "codec_context") and hasattr(stream.codec_context, "coded_side_data"):
-            csd = stream.codec_context.coded_side_data
-            if isinstance(csd, dict) and 'display_matrix' in csd:
-                # For our test fixture, we know it has a 90° rotation
-                # Check if we have display_matrix data with non-zero off-diagonal elements
-                import struct
+            if side_data.get("side_data_type") in ("Display Matrix", "Rotation"):
                 try:
-                    raw_bytes = csd['display_matrix']
-                    if len(raw_bytes) >= 36:  # 9 * 4 bytes
-                        matrix = struct.unpack('<9i', raw_bytes[:36])
-                        # Check if any off-diagonal elements are significant (indicating rotation)
-                        # Off-diagonal elements for a 3x3 matrix: [1,2,3,5,6,7]
-                        off_diagonal = [matrix[1], matrix[2], matrix[3], matrix[5], matrix[6], matrix[7]]
-                        # If any off-diagonal element is large (>1000), assume 90° rotation
-                        if any(abs(x) > 1000 for x in off_diagonal):
-                            needs_rotation = True
-    
-                except Exception:
-                    # If we can't parse, continue silently
-                    pass
+                    rotation = int(round(float(side_data.get("rotation", 0)))) % 360
+                except (TypeError, ValueError):
+                    continue
+                if rotation:
+                    rotation_degrees = rotation
+                    break
 
-    # If rotation is needed, swap dimensions for display orientation
-    # (FFmpeg auto-rotates on decode when rotation metadata is present)
-    if needs_rotation:
+    if rotation_degrees in (90, 270):
         width, height = height, width
-        # After accounting for rotation, we don't need to rotate again in the filter
-        needs_rotation = False
+    # FFmpeg applies display matrix rotation during decode automatically.
+    needs_rotation = False
 
     # Interlaced detection
     field_order = video_stream.get("field_order", "progressive")
@@ -429,6 +353,7 @@ def normalize_asset(asset: MediaAsset) -> NormalizedAsset:
         audio_sample_rate=audio_sample_rate,
         audio_channels=audio_channels,
         needs_rotation=needs_rotation,
+        rotation_degrees=rotation_degrees,
         is_hdr=is_hdr,
         is_10bit=is_10bit,
         needs_deinterlace=needs_deinterlace,
@@ -638,12 +563,7 @@ def normalize_to_file(asset: MediaAsset, out_path: Path, fps: int = 30) -> Path:
             "-color_range", "tv",
             "-r", str(fps)  # Output CFR
         ])
-    else:
-        # No video stream (audio only or still image)
-        if asset.kind == "image":
-            # Still image: loop it
-            cmd.extend(["-loop", "1", "-t", str(asset.duration_ms / 1000.0) if asset.duration_ms > 0 else "1"])
-        # Add null video source for audio-only? No, just process audio
+    # Audio-only sources have no video processing options.
 
     # Audio processing
     if audio_stream is not None:
@@ -652,14 +572,6 @@ def normalize_to_file(asset: MediaAsset, out_path: Path, fps: int = 30) -> Path:
             "-ar", "48000",
             "-ac", "2"
         ])
-    elif asset.kind == "image" and video_stream is None:
-        # Still image with no audio - need to add silent audio? No, just video
-        pass
-    elif video_stream is None and audio_stream is None:
-        # Neither video nor audio - treat as still image
-        if asset.kind == "image":
-            cmd.extend(["-loop", "1", "-t", str(asset.duration_ms / 1000.0) if asset.duration_ms > 0 else "1"])
-
     # Output
     cmd.append(str(out_path))
 
@@ -668,6 +580,28 @@ def normalize_to_file(asset: MediaAsset, out_path: Path, fps: int = 30) -> Path:
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg failed: {result.stderr}")
 
+    return out_path
+
+
+def _normalize_still_image_to_file(asset: MediaAsset, out_path: Path, fps: int) -> Path:
+    """Encode a still image as CFR video for its timeline duration."""
+    duration = max(asset.duration_ms, 1) / 1000.0
+    normalized = normalize_asset(asset)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:],
+        "-loop", "1", "-framerate", str(fps), "-t", str(duration),
+        "-i", str(asset.uri),
+        "-vf", build_normalize_filter(normalized),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
+        "-colorspace", "bt709", "-color_primaries", "bt709",
+        "-color_trc", "bt709", "-color_range", "tv",
+        "-movflags", "+faststart", str(out_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg failed: {result.stderr}")
     return out_path
 
 

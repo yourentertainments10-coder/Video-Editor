@@ -504,3 +504,33 @@ def test_normalize_real_audio_51_asset():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+import av
+
+
+def test_still_image_becomes_5s_clip(tmp_path):
+    png = FIXTURES_DIR / "still_image.png"
+    asset = MediaAsset(asset_id="still", kind="image", uri=str(png), duration_ms=5000)
+    out = normalize_to_file(asset, tmp_path / "still.mp4", fps=30)
+    with av.open(str(out)) as c:
+        v = c.streams.video[0]
+        w, h = v.width, v.height
+        frames = sum(1 for _ in c.decode(v))
+        dur = c.duration / 1_000_000
+    assert (w, h) == (640, 480)
+    assert 4.9 <= dur <= 5.1
+    assert 145 <= frames <= 155
+
+
+def test_rotation_180_detected_dims_unchanged(tmp_path):
+    src = FIXTURES_DIR / "rotated_180.mp4"
+    assert src.exists(), "add rotated_180.mp4 to generate_fixtures.py"
+    asset = MediaAsset(asset_id="r180", kind="video", uri=str(src), duration_ms=2000)
+    n = normalize_asset(asset)
+    assert n.rotation_degrees == 180
+    assert (n.width, n.height) == (640, 480)
+    out = normalize_to_file(asset, tmp_path / "r180.mp4", fps=30)
+    with av.open(str(out)) as c:
+        v = c.streams.video[0]
+        assert (v.width, v.height) == (640, 480)
