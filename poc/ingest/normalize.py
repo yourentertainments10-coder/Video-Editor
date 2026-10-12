@@ -101,6 +101,8 @@ def _parse_av_probe(path: Path) -> dict:
                 # Map FFmpeg color_trc enum values to string names
                 color_trc_map = {
                     1: "bt709",          # BT.709 / sRGB
+                    14: "bt2020-10",     # BT.2020 non-constant peak
+                    15: "bt2020-12",     # BT.2020 constant peak
                     16: "smpte2084",     # PQ (SMPTE ST 2084)
                     18: "arib-std-b67",  # HLG (ARIB STD-B67)
                 }
@@ -383,8 +385,8 @@ def _normalize_still_image(asset: MediaAsset) -> NormalizedAsset:
 def build_normalize_filter(asset: NormalizedAsset) -> str:
     """Build FFmpeg filter chain for normalization based on asset properties.
 
-    The filter chain order is critical: deinterlace -> apply SAR ->
-    make even dimensions -> re-assert square pixels -> format conversion.
+    The filter chain order is critical: deinterlace -> HDR tone-map ->
+    apply SAR -> make even dimensions -> re-assert square pixels -> format conversion.
 
     Returns a filtergraph string suitable for -vf.
     """
@@ -394,29 +396,44 @@ def build_normalize_filter(asset: NormalizedAsset) -> str:
     if asset.needs_deinterlace:
         filters.append("bwdif")
 
-    # 2. Apply sample aspect ratio and set to square pixels
-    # We need to get the SAR from the original video stream since it's not stored in NormalizedAsset
-    # For now, we'll apply the SAR transformation if needed_even_dimensions is True
-    # This is a simplification - in a full implementation we'd store SAR in NormalizedAsset
-    if asset.needs_even_dimensions:
+    # 2. Handle HDR tone mapping (if HDR)
+    if asset.is_hdr:
+        if asset.is_10bit:
+            # Proper HDR to SDR tone-mapping chain
+            # Maps 10-bit HDR (PQ/HLG) to 8-bit BT.709
+            filters.append("zscale=t=linear:npl=100,format=gbrpf32le")
+            filters.append("zscale=p=bt709")
+            filters.append("tonemap=tonemap=hable:desat=0")
+            filters.append("zscale=t=bt709:m=bt709:r=tv,format=yuv420p")
+        else:
+            # Simple colorspace conversion for non-10bit HDR
+            filters.append("colorspace=all=bt709:iall=bt2020:fast=1")
+
+    # 3. Handle 10bit to 8bit conversion (if not already handled by HDR)
+    if asset.is_10bit and not asset.is_hdr:
+        filters.append("format=yuv420p")
+
+    # 4. Apply sample aspect ratio and set to square pixels
+    # Apply whenever SAR != 1:1, independent of odd dimensions
+    if asset.sample_aspect_ratio != "1:1":
         # Apply SAR to get correct display dimensions, then set SAR to 1:1
         filters.append("scale=iw*sar:ih,setsar=1")
 
-    # 3. Make dimensions even (required by most codecs)
+    # 5. Make dimensions even (required by most codecs)
     # Apply after SAR processing to avoid aspect ratio distortion
     if asset.needs_even_dimensions:
         filters.append("scale=trunc(iw/2)*2:trunc(ih/2)*2")
 
-    # 4. Re-assert square pixels in case even-making altered SAR
+    # 6. Re-assert square pixels in case even-making altered SAR
     if asset.needs_even_dimensions:
         filters.append("setsar=1")
 
-    # 5. ALWAYS ensure square pixels (setsar=1) - this is a safe no-op for already-square pixels
+    # 7. ALWAYS ensure square pixels (setsar=1) - this is a safe no-op for already-square pixels
     # but important to explicitly set for all assets
     if "setsar=1" not in ",".join(filters):
         filters.append("setsar=1")
 
-    # 6. Format conversion (ensure yuv420p for compatibility)
+    # 8. Format conversion (ensure yuv420p for compatibility)
     filters.append("format=yuv420p")
 
     # Note: Rotation is handled by FFmpeg auto-rotate on decode (display-matrix/side data),

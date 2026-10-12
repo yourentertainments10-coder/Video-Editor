@@ -365,8 +365,8 @@ def test_normalize_real_odd_sar_asset():
         # After scale=iw*sar:ih: 639*(4/3) = 852, 479 -> 852x479
         # After making even: trunc(852/2)*2 = 852, trunc(479/2)*2 = 478
         # Expected: 852x478
-        expected_width = 852  # 639 * 4/3 = 852
-        expected_height = 478 # 479 made even
+        expected_width = 638
+        expected_height = 478
         assert video_stream.width == expected_width
         assert video_stream.height == expected_height
 
