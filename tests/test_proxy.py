@@ -34,7 +34,7 @@ def test_proxy_is_cached(tmp_path):
 def test_broken_partial_proxy_is_not_a_cache_hit(tmp_path):
     a = MediaAsset(asset_id="s", kind="video", uri=str(FIX/"vfr_clip.mp4"), duration_ms=6000)
     cached = make_proxy(a, tmp_path)
-    partial = cached.with_suffix(".partial.mp4")
+    partial = cached.with_name(f"{cached.stem}.{os.getpid()}.partial.mp4")
     cached.unlink()
     partial.write_bytes(b"broken leftover")
 
@@ -52,3 +52,33 @@ def test_thumbnails_count_and_size(tmp_path):
         with av.open(str(t)) as c:
             v = c.streams.video[0]
             assert v.width == 320 and v.height == 180
+
+
+import hashlib, av, pytest
+from poc.timeline import MediaAsset
+from poc.ingest.proxy import make_proxy
+# FIX = fixtures/ingest dir (reuse the existing constant in this file)
+
+def _src():
+    return FIX / "landscape_1080p.mp4"
+
+def test_bad_content_hash_rejected(tmp_path):
+    a = MediaAsset(asset_id="x", kind="video", uri=str(_src()),
+                   duration_ms=2000, metadata={"content_hash": "abc"})
+    with pytest.raises(ValueError):
+        make_proxy(a, tmp_path)
+
+def test_library_hash_gives_same_cache_entry(tmp_path):
+    real = hashlib.sha256(_src().read_bytes()).hexdigest()
+    a1 = MediaAsset(asset_id="x", kind="video", uri=str(_src()),
+                    duration_ms=2000, metadata={"content_hash": real})
+    a2 = MediaAsset(asset_id="x", kind="video", uri=str(_src()), duration_ms=2000)
+    assert make_proxy(a1, tmp_path) == make_proxy(a2, tmp_path)
+
+def test_video_proxy_uses_probed_duration(tmp_path):
+    with av.open(str(_src())) as c:
+        real = float(c.duration) / 1e6
+    a = MediaAsset(asset_id="x", kind="video", uri=str(_src()), duration_ms=999_000)
+    with av.open(str(make_proxy(a, tmp_path))) as c:
+        got = float(c.duration) / 1e6
+    assert abs(got - real) < 0.1

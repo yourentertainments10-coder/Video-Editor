@@ -188,6 +188,13 @@ def main():
         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(portrait_path)
     ], "1080p portrait proxy fixture")
 
+    # 12. Detailed 1080p still image for Ken Burns motion tests
+    pattern_path = fixtures_dir / "pattern.png"
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "testsrc2=s=1920x1080",
+        "-frames:v", "1", str(pattern_path)
+    ], "Ken Burns pattern image")
+
     print(f"\nDone! Fixtures created in {fixtures_dir}")
     for f in fixtures_dir.rglob("*"):
         if f.is_file():

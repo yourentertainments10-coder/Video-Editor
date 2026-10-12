@@ -13,6 +13,8 @@ metadata access.
 from __future__ import annotations
 
 import subprocess
+import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -602,6 +604,104 @@ def _normalize_still_image_to_file(asset: MediaAsset, out_path: Path, fps: int) 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg failed: {result.stderr}")
+    return out_path
+
+
+def ken_burns_to_file(
+    asset: MediaAsset,
+    out_path: Path,
+    *,
+    duration_ms: int,
+    fps: int = 30,
+    out_w: int = 1920,
+    out_h: int = 1080,
+    start_zoom: float = 1.0,
+    end_zoom: float = 1.2,
+    focus_x: float = 0.5,
+    focus_y: float = 0.5,
+) -> Path:
+    """Render a still image with a smooth, frame-indexed Ken Burns crop."""
+    import numpy as np
+
+    if asset.kind != "image":
+        raise ValueError("Ken Burns input must be a still image asset")
+    _validate_no_network_paths(asset.uri)
+    if duration_ms <= 0 or fps <= 0 or out_w <= 0 or out_h <= 0:
+        raise ValueError("Duration, frame rate, and output dimensions must be positive")
+    if out_w % 2 or out_h % 2:
+        raise ValueError("Output dimensions must be even for yuv420p encoding")
+    if not all(math.isfinite(value) and value >= 1.0 for value in (start_zoom, end_zoom)):
+        raise ValueError("Ken Burns zoom values must be finite and at least 1.0")
+    if not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in (focus_x, focus_y)):
+        raise ValueError("Focus coordinates must be between 0 and 1")
+
+    with av.open(str(asset.uri)) as source:
+        image = next(source.decode(video=0), None)
+        if image is None:
+            raise ValueError(f"Image contains no decodable video frame: {asset.uri}")
+        source_rgb = image.to_ndarray(format="rgb24")
+
+    # Resize to a 2x cover canvas first. This leaves room for zooming in while
+    # preserving the requested output aspect ratio at every frame.
+    source_h, source_w = source_rgb.shape[:2]
+    canvas_w, canvas_h = out_w * 2, out_h * 2
+    cover_scale = max(canvas_w / source_w, canvas_h / source_h)
+    cover_w = max(canvas_w, math.ceil(source_w * cover_scale))
+    cover_h = max(canvas_h, math.ceil(source_h * cover_scale))
+    cover_frame = av.VideoFrame.from_ndarray(source_rgb, format="rgb24")
+    cover_rgb = cover_frame.reformat(
+        width=cover_w, height=cover_h, format="rgb24"
+    ).to_ndarray(format="rgb24")
+    offset_x = (cover_w - canvas_w) // 2
+    offset_y = (cover_h - canvas_h) // 2
+    canvas = cover_rgb[offset_y:offset_y + canvas_h, offset_x:offset_x + canvas_w]
+
+    frame_count = max(1, round(duration_ms * fps / 1000))
+    duration_s = duration_ms / 1000.0
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_path = out_path.with_name(
+        f"{out_path.stem}.{os.getpid()}.partial{out_path.suffix}"
+    )
+    cmd = [
+        FFMPEG_EXE, "-y", "-loglevel", "error", *FFMPEG_NETWORK_SAFE[1:],
+        "-f", "rawvideo", "-pixel_format", "rgb24",
+        "-video_size", f"{out_w}x{out_h}", "-framerate", str(fps),
+        "-i", "pipe:0", "-an", "-frames:v", str(frame_count),
+        "-t", str(duration_s), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-r", str(fps), "-colorspace", "bt709", "-color_primaries", "bt709",
+        "-color_trc", "bt709", "-color_range", "tv", str(partial_path),
+    ]
+    encoder = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+    )
+    try:
+        assert encoder.stdin is not None
+        for index in range(frame_count):
+            progress = index / max(frame_count - 1, 1)
+            zoom = start_zoom + (end_zoom - start_zoom) * progress
+            crop_w = max(2, min(canvas_w, round(canvas_w / zoom)))
+            crop_h = max(2, min(canvas_h, round(canvas_h / zoom)))
+            crop_x = round(focus_x * (canvas_w - crop_w))
+            crop_y = round(focus_y * (canvas_h - crop_h))
+            crop = canvas[crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
+            scaled = av.VideoFrame.from_ndarray(crop, format="rgb24").reformat(
+                width=out_w, height=out_h, format="rgb24"
+            )
+            encoder.stdin.write(scaled.to_ndarray(format="rgb24").tobytes())
+        encoder.stdin.close()
+        stderr = encoder.stderr.read() if encoder.stderr else b""
+        returncode = encoder.wait()
+    except BaseException:
+        if encoder.poll() is None:
+            encoder.kill()
+        encoder.communicate()
+        partial_path.unlink(missing_ok=True)
+        raise
+    if returncode != 0:
+        partial_path.unlink(missing_ok=True)
+        raise RuntimeError(f"FFmpeg Ken Burns encoding failed: {stderr.decode(errors='replace')}")
+    os.replace(partial_path, out_path)
     return out_path
 
 

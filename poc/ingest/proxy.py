@@ -74,9 +74,8 @@ def _cache_key(asset: MediaAsset, path: Path, params: dict) -> str:
 
 def _duration_seconds(asset: MediaAsset, normalized) -> float:
     duration_ms = (
-        asset.duration_ms or normalized.duration_ms
-        if asset.kind == "image"
-        else normalized.duration_ms
+        (asset.duration_ms or normalized.duration_ms)
+        if asset.kind == "image" else normalized.duration_ms
     )
     if not duration_ms:
         raise ValueError("Media asset duration is required to make a proxy or thumbnails")
@@ -116,9 +115,15 @@ def make_proxy(asset: MediaAsset, cache_dir: Path) -> Path:
     if out_path.is_file():
         return out_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    partial_path = out_path.with_suffix(".partial.mp4")
+    partial_path = out_path.with_name(
+        f"{out_path.stem}.{os.getpid()}.partial.mp4"
+    )
 
-    filters = [params["normalize_filter"], r"scale=-2:min(720\,ih)", "fps=30"]
+    filters = [
+        params["normalize_filter"],
+        f"scale=-2:min({PROXY_HEIGHT}\\,ih)",
+        f"fps={PROXY_FPS}",
+    ]
     cmd = [FFMPEG_EXE, "-y", *_input_args(asset, duration, still_loop=True)]
     cmd.extend([
         "-t", str(duration),
@@ -175,7 +180,9 @@ def make_thumbnails(
         if thumb.is_file():
             continue
         timestamp = duration * (index + 0.5) / count
-        partial_path = thumb.with_suffix(".partial.jpg")
+        partial_path = thumb.with_name(
+            f"{thumb.stem}.{os.getpid()}.partial.jpg"
+        )
         cmd = [FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:]]
         if asset.kind == "image":
             cmd.extend(["-i", str(asset.uri)])
