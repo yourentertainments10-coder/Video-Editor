@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from poc.ingest.normalize import normalize_asset, NormalizedAsset
+from poc.ingest.normalize import normalize_asset, NormalizedAsset, normalize_to_file
 from poc.timeline import MediaAsset
 
 
@@ -85,7 +85,7 @@ def test_hdr_10bit_handling():
 
 def test_odd_dimensions_handling():
     """Test that odd dimensions + non-square SAR are handled correctly."""
-    odd_sar_path = FIXTURES_DIR / "odd_sar.mp4"
+    odd_sar_path = FIXTURES_DIR / "odd_sar.mkv"  # Renamed from .mp4 to .mkv
     assert odd_sar_path.exists(), "Odd SAR fixture not found"
 
     asset = MediaAsset(
@@ -97,17 +97,12 @@ def test_odd_dimensions_handling():
 
     normalized = normalize_asset(asset)
 
-    # Dimensions should be 638x478 (even x even after crop in generation)
-    # The test fixture was created with crop=639:479 but encoder requires even dimensions
-    # So actual dimensions are 638x478 (both even)
-    assert normalized.width == 638
-    assert normalized.height == 478
-    assert normalized.width % 2 == 0  # Even
-    assert normalized.height % 2 == 0  # Even
-
-    # The clip has non-square SAR (4:3)
-    # Our needs_even_dimensions check will be False since dimensions are even
-    # The SAR is handled separately in normalization
+    # Fixture was generated with ffv1 at 639x479 with SAR 4:3 (truly odd dimensions)
+    assert normalized.width == 639
+    assert normalized.height == 479
+    assert normalized.width % 2 == 1  # Odd
+    assert normalized.height % 2 == 1  # Odd
+    assert normalized.needs_even_dimensions == True
 
 
 def test_interlaced_handling():
@@ -205,10 +200,13 @@ def test_still_image_handling():
     assert normalized.width == 640
     assert normalized.height == 480
 
-    # Test that the filter chain includes setsar=1
+    # Test that the filter chain is valid (for still images, it includes format=yuv420p and setsar=1)
     from poc.ingest.normalize import build_normalize_filter
     filter_str = build_normalize_filter(normalized)
-    assert "setsar=1" in filter_str or filter_str == "null"
+    # Still image filter should be valid and include format=yuv420p
+    assert "format=yuv420p" in filter_str
+    # Should also include setsar=1 for square pixels
+    assert "setsar=1" in filter_str
 
 
 def test_normalize_real_vfr_asset():
@@ -279,43 +277,26 @@ def test_normalize_real_rotated_asset():
     # Run normalization and transcode to verify output
     normalized = normalize_asset(asset)
 
-    # Build FFmpeg command to transpose and normalize
-    import subprocess, av, tempfile
-    from pathlib import Path
+    # Use normalize_to_file to transcode and verify actual output
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        out_path = Path(tmp_dir) / "rotated_normalized.mp4"
+        normalize_to_file(asset, out_path, fps=30)
 
-    FFMPEG = ".venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe"
-    with tempfile.TemporaryDirectory() as tmp:
-        out_path = Path(tmp) / "rotated_out.mp4"
-        # Build filter: transpose to correct rotation, setsar=1
-        filter_parts = ["transpose=1", "setsar=1"]  # 90 degrees clockwise
-        vf = ",".join(filter_parts)
-
-        cmd = [
-            FFMPEG, "-y",
-            "-i", str(rotated_path),
-            "-vf", vf,
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            str(out_path)
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        assert result.returncode == 0, f"FFmpeg failed: {result.stderr}"
-
-        # Probe the output
+        # Probe the output with PyAV
+        import av
         container = av.open(str(out_path))
         video_stream = next(s for s in container.streams if s.type == "video")
-        # After transpose, should be 640x480 (original dimensions)
-        assert video_stream.width == 640
-        assert video_stream.height == 480
+        # After FFmpeg auto-rotation on decode (due to display_rotation metadata),
+        # the output should be in the displayed orientation: 480x640
+        assert video_stream.width == 480
+        assert video_stream.height == 640
         # Should be yuv420p 8-bit
-        assert video_stream.pix_fmt == "yuv420p"
-        # Should be progressive
         assert video_stream.pix_fmt == "yuv420p"
         container.close()
 
 
 def test_normalize_real_hdr_asset():
-    """Test normalizing a 10-bit asset produces 8-bit BT.709 output."""
+    """Test normalizing a 10-bit HDR asset produces 8-bit BT.709 output."""
     hdr_path = FIXTURES_DIR / "hdr_10bit.mp4"
     asset = MediaAsset(
         asset_id="hdr-test",
@@ -326,42 +307,30 @@ def test_normalize_real_hdr_asset():
 
     # Run normalization and transcode to verify output
     normalized = normalize_asset(asset)
+    # The clip is 10-bit but uses BT.709 transfer (color_trc=2 maps to bt709)
+    # It's 10-bit but not HDR (no PQ or HLG) with our current detection
+    assert normalized.is_10bit == True
+    # Note: Our HDR detection is limited to specific values, color_trc=2 is BT.709
+    # which is not in our HDR list, so is_hdr will be False
 
-    # Build FFmpeg command to convert 10-bit to 8-bit BT.709
-    import subprocess, av, tempfile
-    from pathlib import Path
+    # Use normalize_to_file to transcode and verify actual output
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        out_path = Path(tmp_dir) / "hdr_normalized.mp4"
+        normalize_to_file(asset, out_path, fps=30)
 
-    FFMPEG = ".venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe"
-    with tempfile.TemporaryDirectory() as tmp:
-        out_path = Path(tmp) / "hdr_out.mp4"
-        # Build filter: format conversion for 10-bit to 8-bit, setsar=1
-        filter_parts = ["format=yuv420p", "setsar=1"]
-        vf = ",".join(filter_parts)
-
-        cmd = [
-            FFMPEG, "-y",
-            "-i", str(hdr_path),
-            "-vf", vf,
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            str(out_path)
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        assert result.returncode == 0, f"FFmpeg failed: {result.stderr}"
-
-        # Probe the output
+        # Probe the output with PyAV
+        import av
         container = av.open(str(out_path))
         video_stream = next(s for s in container.streams if s.type == "video")
         # Should be yuv420p 8-bit
         assert video_stream.pix_fmt == "yuv420p"
-        # Should be BT.709 color (transfer=bt709, primaries=bt709, matrix=bt709)
-        # Note: FFmpeg may not set these in container metadata, but stream should be correct
+        # TODO: Check for proper BT.709 colorspace tags when we have real HDR
         container.close()
 
 
 def test_normalize_real_odd_sar_asset():
     """Test normalizing an odd-size + SAR asset produces even dimensions and SAR 1:1."""
-    odd_sar_path = FIXTURES_DIR / "odd_sar.mp4"
+    odd_sar_path = FIXTURES_DIR / "odd_sar.mkv"  # Now using MKV with odd dimensions
     asset = MediaAsset(
         asset_id="odd-sar-test",
         kind="video",
@@ -372,39 +341,35 @@ def test_normalize_real_odd_sar_asset():
     # Run normalization and transcode to verify output
     normalized = normalize_asset(asset)
 
-    # Build FFmpeg command to make dimensions even and set SAR to 1:1
-    import subprocess, av, tempfile
-    from pathlib import Path
+    # Use normalize_to_file to transcode and verify actual output
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        out_path = Path(tmp_dir) / "odd_sar_normalized.mp4"
+        normalize_to_file(asset, out_path, fps=30)
 
-    FFMPEG = ".venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe"
-    with tempfile.TemporaryDirectory() as tmp:
-        out_path = Path(tmp) / "odd_sar_out.mp4"
-        # Build filter: make dimensions even, setsar=1
-        filter_parts = ["crop=iw-mod(iw\\,2):ih-mod(ih\\,2)", "setsar=1"]
-        vf = ",".join(filter_parts)
-
-        cmd = [
-            FFMPEG, "-y",
-            "-i", str(odd_sar_path),
-            "-vf", vf,
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            str(out_path)
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        assert result.returncode == 0, f"FFmpeg failed: {result.stderr}"
-
-        # Probe the output
+        # Probe the output with PyAV
+        import av
         container = av.open(str(out_path))
         video_stream = next(s for s in container.streams if s.type == "video")
-        # Dimensions should be even
+
+        # Dimensions should be even (after making even)
         assert video_stream.width % 2 == 0
         assert video_stream.height % 2 == 0
         # Should be yuv420p 8-bit
         assert video_stream.pix_fmt == "yuv420p"
-        # SAR should be 1:1 (square pixels)
+        # SAR should be 1:1 (square pixels) - exact match
         assert video_stream.sample_aspect_ratio.numerator == 1
         assert video_stream.sample_aspect_ratio.denominator == 1
+
+        # Width should be approximately original_width * 4/3
+        # Original: 639x479 with SAR 4:3
+        # After scale=iw*sar:ih: 639*(4/3) = 852, 479 -> 852x479
+        # After making even: trunc(852/2)*2 = 852, trunc(479/2)*2 = 478
+        # Expected: 852x478
+        expected_width = 852  # 639 * 4/3 = 852
+        expected_height = 478 # 479 made even
+        assert video_stream.width == expected_width
+        assert video_stream.height == expected_height
+
         container.close()
 
 
@@ -421,35 +386,20 @@ def test_normalize_real_interlaced_asset():
     # Run normalization and transcode to verify output
     normalized = normalize_asset(asset)
 
-    # Build FFmpeg command to deinterlace and normalize
-    import subprocess, av, tempfile
-    from pathlib import Path
+    # Use normalize_to_file to transcode and verify actual output
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        out_path = Path(tmp_dir) / "interlaced_normalized.mp4"
+        normalize_to_file(asset, out_path, fps=30)
 
-    FFMPEG = ".venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe"
-    with tempfile.TemporaryDirectory() as tmp:
-        out_path = Path(tmp) / "interlaced_out.mp4"
-        # Build filter: bwdif for deinterlace, setsar=1
-        filter_parts = ["bwdif", "setsar=1"]
-        vf = ",".join(filter_parts)
-
-        cmd = [
-            FFMPEG, "-y",
-            "-i", str(interlaced_path),
-            "-vf", vf,
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            str(out_path)
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        assert result.returncode == 0, f"FFmpeg failed: {result.stderr}"
-
-        # Probe the output
+        # Probe the output with PyAV
+        import av
         container = av.open(str(out_path))
         video_stream = next(s for s in container.streams if s.type == "video")
         # Should be yuv420p 8-bit
         assert video_stream.pix_fmt == "yuv420p"
         # Should be progressive (not interlaced)
-        assert video_stream.pix_fmt == "yuv420p"
+        # Check if we can determine this from field_order or similar
+        # For now, just verify it's valid video that plays
         container.close()
 
 

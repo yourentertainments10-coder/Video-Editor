@@ -47,32 +47,33 @@ def main():
         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(vfr_path)
     ], "VFR clip")
 
-    # 2. 90° rotated clip (using rotate metadata)
+    # 2. 90° rotated clip (using display rotation metadata - INPUT SIDE)
+    # Re-encode to 480x640 (portrait) to match intended displayed output
     rotated_path = fixtures_dir / "rotated_90.mp4"
     run_ffmpeg([
-        "-f", "lavfi", "-i", "color=c=yellow:s=480x640:r=30:d=2",
+        "-display_rotation", "90",  # INPUT side rotation
+        "-f", "lavfi", "-i", "color=c=yellow:s=640x480:r=30:d=2",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-metadata:s:v:0", "rotate=90",
         str(rotated_path)
-    ], "90° rotated clip")
+    ], "90° rotated clip (display rotation)")
 
     # 3. HDR 10-bit clip (PQ tagged)
     hdr_path = fixtures_dir / "hdr_10bit.mp4"
     run_ffmpeg([
         "-f", "lavfi", "-i", "color=c=white:s=640x480:r=30:d=2",
         "-c:v", "libx264", "-pix_fmt", "yuv420p10le",
-        "-color_trc", "smpte2084",  # PQ transfer
-        "-color_primaries", "bt2020",
+        "-color_trc", "smpte2084",  # PQ transfer (16)
+        "-color_primaries", "bt2020", # BT.2020
         "-colorspace", "bt2020nc",
         str(hdr_path)
     ], "HDR 10-bit (PQ) clip")
 
-    # 4. Odd-size clip with non-square SAR - use even dimensions for encoder
-    odd_sar_path = fixtures_dir / "odd_sar.mp4"
+    # 4. Odd-size clip with non-square SAR - use odd dimensions (mkv/ffv1 allows odd sizes)
+    odd_sar_path = fixtures_dir / "odd_sar.mkv"
     run_ffmpeg([
-        "-f", "lavfi", "-i", "color=c=cyan:s=640x480:r=30:d=2",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-vf", "crop=639:479,setsar=4/3",  # odd dims + non-square SAR
+        "-f", "lavfi", "-i", "color=c=cyan:s=639x479:r=30:d=2",
+        "-c:v", "ffv1",
+        "-vf", "setsar=4/3",
         str(odd_sar_path)
     ], "odd-size + non-square SAR clip")
 
