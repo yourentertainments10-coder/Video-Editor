@@ -22,3 +22,10 @@ poc_cache/
 ffmpeg_info.txt
 
 command.md
+# Generated test fixtures
+tests/fixtures/ingest/
+
+# Test reports
+pytest_full.txt
+pytest_report.xml
+git_*.txt
