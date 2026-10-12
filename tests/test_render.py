@@ -26,8 +26,8 @@ def long_paths_enabled():
         return False
 
 
-def test_unicode_and_long_paths(tmp_path):
-    """Test that Unicode and long Windows paths are handled during ingest normalization."""
+def test_unicode_paths(tmp_path):
+    """Test that Unicode paths are handled during ingest normalization."""
     # Use a real fixture clip
     fixture_src = Path("tests/fixtures/ingest/vfr_clip.mp4")
     assert fixture_src.exists(), "VFR fixture not found"
@@ -49,9 +49,15 @@ def test_unicode_and_long_paths(tmp_path):
     assert normalized is not None
     assert normalized.duration_ms > 0
 
-    # --- Long path test (conditionally skipped) ---
+
+def test_long_paths(tmp_path):
+    """Test that long Windows paths are handled during ingest normalization (when enabled)."""
     if not long_paths_enabled():
         pytest.skip("Windows LongPathsEnabled=0")
+
+    # Use a real fixture clip
+    fixture_src = Path("tests/fixtures/ingest/vfr_clip.mp4")
+    assert fixture_src.exists(), "VFR fixture not found"
 
     # Build a path >240 characters
     # Windows max path is 260, we aim for ~250 to be safe
@@ -63,16 +69,16 @@ def test_unicode_and_long_paths(tmp_path):
     long_path = long_base / long_filename
     shutil.copy(fixture_src, long_path)
 
-    asset2 = MediaAsset(
+    asset = MediaAsset(
         asset_id="long-path-test",
         kind="video",
         uri=str(long_path),
         duration_ms=6000,
     )
     # Should not raise on validation
-    normalized2 = normalize_asset(asset2)
-    assert normalized2 is not None
-    assert normalized2.duration_ms > 0
+    normalized = normalize_asset(asset)
+    assert normalized is not None
+    assert normalized.duration_ms > 0
 
 
 def test_legacy_render_is_deterministic(tmp_path):
@@ -158,38 +164,46 @@ def test_legacy_render_is_deterministic(tmp_path):
     # we'll check that the files are byte-identical (which should be true for deterministic rendering)
     # However, due to potential timestamps in containers, we'll check key properties
 
-    # Check that both files exist and have same size (approximate check)
-    assert out_path1.exists()
-    assert out_path2.exists()
-
-    # More robust check: use ffprobe to compare frame counts and key frame positions
+    # More robust check: decode and compare frame hashes at key positions
+    # Since we're testing deterministic rendering, frames at each cut should match exactly
     try:
         import subprocess
-        import json as json_module
+        import tempfile
+        import av
 
-        # Get frame count for both outputs
-        def get_frame_count(video_path):
-            cmd = [
-                "ffprobe", "-v", "error", "-count_frames",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=nb_read_frames",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                str(video_path)
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode == 0:
-                return int(result.stdout.strip())
-            return -1
+        # Extract frames at specific timestamps and compare their hashes
+        def get_frame_hash_at_time(video_path, time_ms):
+            """Extract a single frame at time_ms and return its SHA256 hash."""
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                frame_path = Path(tmp_dir) / "frame.png"
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", f"{time_ms/1000.0:.3f}",  # seek to time
+                    "-i", str(video_path),
+                    "-frames:v", "1",  # extract exactly one frame
+                    "-f", "image2pipe",  # output to pipe
+                    "-vcodec", "png",    # output as png for consistent hashing
+                    str(frame_path)
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                if result.returncode != 0:
+                    return None
+                # Read the frame and compute hash
+                import hashlib
+                with open(frame_path, "rb") as f:
+                    frame_data = f.read()
+                return hashlib.sha256(frame_data).hexdigest()
 
-        frames1 = get_frame_count(out_path1)
-        frames2 = get_frame_count(out_path2)
+        # Test frames at key positions: start, middle, end
+        test_times_ms = [0, 500, 1000]  # 0s, 0.5s, 1.0s (assuming 1-second timeline)
+        for t_ms in test_times_ms:
+            hash1 = get_frame_hash_at_time(out_path1, t_ms)
+            hash2 = get_frame_hash_at_time(out_path2, t_ms)
+            assert hash1 is not None and hash2 is not None, f"Failed to extract frame at {t_ms}ms"
+            assert hash1 == hash2, f"Frame hash mismatch at {t_ms}ms: {hash1} != {hash2}"
 
-        # If we can get frame counts, they should match
-        if frames1 >= 0 and frames2 >= 0:
-            assert frames1 == frames2
-
-    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
-        # If ffprobe is not available or fails, fall back to file size comparison
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError, ImportError):
+        # If ffprobe/av is not available or fails, fall back to file size comparison
         # This is less reliable but better than nothing for a unit test
         size1 = out_path1.stat().st_size
         size2 = out_path2.stat().st_size
