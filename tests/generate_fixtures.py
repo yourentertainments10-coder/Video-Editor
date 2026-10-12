@@ -175,6 +175,19 @@ def main():
         str(still_png)
     ], "still image")
 
+    # 11. 1080p landscape and portrait clips for proxy sizing tests
+    landscape_path = fixtures_dir / "landscape_1080p.mp4"
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "color=c=blue:s=1920x1080:r=30:d=3",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(landscape_path)
+    ], "1080p landscape proxy fixture")
+
+    portrait_path = fixtures_dir / "portrait_1080p.mp4"
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "color=c=green:s=1080x1920:r=30:d=3",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(portrait_path)
+    ], "1080p portrait proxy fixture")
+
     print(f"\nDone! Fixtures created in {fixtures_dir}")
     for f in fixtures_dir.rglob("*"):
         if f.is_file():
