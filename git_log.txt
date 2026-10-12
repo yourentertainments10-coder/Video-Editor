@@ -1,8 +1,0 @@
-508f1ed WIP Step 3a/3b: renderer interface + ingest normalization (unverified on real media)
-39cfbf0 Step 2: offline enforcement (socket guard incl. connect_ex, model registry, xfail markers)
-10b6ea8 Step 1: baseline verification + offline checker docs
-3c92bfc added doc folder
-8de52e9 Freeze evaluation protocol before collecting real footage
-90749aa Step 9: evaluation harness
-f986573 Step 8 follow-up: fix cross-component frame-alignment bug (Option 2)
-bb38fab Step 8: end-to-end pipeline
