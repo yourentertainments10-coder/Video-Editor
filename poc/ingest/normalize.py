@@ -354,7 +354,7 @@ def normalize_asset(asset: MediaAsset) -> NormalizedAsset:
     rotate_tag = probe_data.get("format", {}).get("tags", {}).get("rotate")
     if rotate_tag and rotate_tag != "0":
         needs_rotation = True
-        print(f"DEBUG: Found rotate tag in format: {rotate_tag}")
+
 
     # Check side data for rotation
     for stream in probe_data.get("streams", []):
@@ -363,13 +363,13 @@ def normalize_asset(asset: MediaAsset) -> NormalizedAsset:
                 rotation = side_data.get("rotation", 0)
                 if rotation != 0:
                     needs_rotation = True
-                    print(f"DEBUG: Found Display Matrix side_data with rotation: {rotation}")
+
                     break
             elif side_data.get("side_data_type") == "Rotation":
                 rotation = int(side_data.get("rotation", 0))
                 if rotation != 0:
                     needs_rotation = True
-                    print(f"DEBUG: Found Rotation side_data with rotation: {rotation}")
+
                     break
 
         # Check for coded_side_data (PyAV exposes side data through codec_context.coded_side_data)
@@ -389,7 +389,7 @@ def normalize_asset(asset: MediaAsset) -> NormalizedAsset:
                         # If any off-diagonal element is large (>1000), assume 90° rotation
                         if any(abs(x) > 1000 for x in off_diagonal):
                             needs_rotation = True
-                            print(f"DEBUG: Found significant off-diagonal elements in display_matrix: {off_diagonal}")
+    
                 except Exception:
                     # If we can't parse, continue silently
                     pass
@@ -591,6 +591,10 @@ def normalize_to_file(asset: MediaAsset, out_path: Path, fps: int = 30) -> Path:
     """
     _validate_no_network_paths(asset.uri)
 
+    # Handle still images FIRST - they need -loop 1 -framerate -t BEFORE -i
+    if asset.kind == "image":
+        return _normalize_still_image_to_file(asset, out_path, fps)
+
     # Probe the media file using PyAV
     probe_data = _parse_av_probe(Path(asset.uri))
 
@@ -603,6 +607,9 @@ def normalize_to_file(asset: MediaAsset, out_path: Path, fps: int = 30) -> Path:
         elif stream.get("codec_type") == "audio" and audio_stream is None:
             audio_stream = stream
 
+    # Get normalized asset properties using normalize_asset()
+    normalized = normalize_asset(asset)
+
     # Build FFmpeg command
     cmd = [FFMPEG_EXE, "-y"]
 
@@ -614,110 +621,8 @@ def normalize_to_file(asset: MediaAsset, out_path: Path, fps: int = 30) -> Path:
 
     # Video processing
     if video_stream is not None:
-        # Get the normalize filter
-        # Create a temporary NormalizedAsset to get the filter
-        temp_asset = NormalizedAsset(
-            path=Path(asset.uri),
-            duration_ms=int(float(probe_data.get("format", {}).get("duration", 0)) * 1000),
-            width=int(video_stream.get("width", 0)) if video_stream.get("width") else 0,
-            height=int(video_stream.get("height", 0)) if video_stream.get("height") else 0,
-            fps=float(video_stream.get("average_rate", "0/0")) if video_stream.get("average_rate") else 0.0,
-            has_audio=audio_stream is not None,
-            audio_sample_rate=int(audio_stream.get("sample_rate", 0)) if audio_stream else 0,
-            audio_channels=int(audio_stream.get("channels", 0)) if audio_stream else 0,
-            needs_rotation=False,  # Will be detected properly in actual implementation
-            is_hdr=False,
-            is_10bit=False,
-            needs_deinterlace=False,
-            needs_even_dimensions=False,
-            is_still_image=False,
-            is_vfr=False,
-        )
-
-        # Get proper normalization filter
-        # But we need to actually detect the properties properly
-        # Let's redo the detection properly here
-
-        # Re-extract with proper typing
-        width = int(video_stream.get("width", 0)) if video_stream.get("width") else 0
-        height = int(video_stream.get("height", 0)) if video_stream.get("height") else 0
-        pix_fmt = video_stream.get("pix_fmt", "")
-
-        avg_frame_rate = video_stream.get("avg_frame_rate", "0/0")
-        r_frame_rate = video_stream.get("r_frame_rate", "0/0")
-
-        def parse_fraction(frac: str) -> float:
-            if "/" not in frac:
-                return float(frac)
-            num, den = frac.split("/")
-            return float(num) / float(float(den) if den != "0" else 1)
-
-        fps_val = parse_fraction(avg_frame_rate)
-        is_vfr = parse_fraction(r_frame_rate) != fps_val
-
-        is_10bit = any(x in pix_fmt for x in ["10", "12", "16"]) and "rgb" not in pix_fmt.lower()
-
-        color_transfer = video_stream.get("color_transfer", "")
-        is_hdr = color_transfer in ["arib-std-b67", "smpte2084", "bt2020-10", "bt2020-12"]
-
-        # Rotation detection
-        needs_rotation = False
-        # Check for rotate tag in format tags
-        rotate_tag = probe_data.get("format", {}).get("tags", {}).get("rotate")
-        if rotate_tag and rotate_tag != "0":
-            needs_rotation = True
-
-        # Check side data for rotation
-        for stream in probe_data.get("streams", []):
-            for side_data in stream.get("side_data_list", []):
-                if side_data.get("side_data_type") == "Display Matrix":
-                    rotation = side_data.get("rotation", 0)
-                    if rotation != 0:
-                        needs_rotation = True
-                        break
-                elif side_data.get("side_data_type") == "Rotation":
-                    rotation = int(side_data.get("rotation", 0))
-                    if rotation != 0:
-                        needs_rotation = True
-                        break
-
-        # Interlaced detection
-        field_order = video_stream.get("field_order", "progressive")
-        needs_deinterlace = field_order != "progressive"
-
-        # Even dimensions requirement
-        needs_even_dimensions = (width % 2 != 0) or (height % 2 != 0)
-
-        # Audio properties
-        has_audio = audio_stream is not None
-        audio_sample_rate = 0
-        audio_channels = 0
-        if has_audio:
-            audio_sample_rate = int(audio_stream.get("sample_rate", 0))
-            audio_channels = int(audio_stream.get("channels", 0))
-
-        # Create proper NormalizedAsset for filter building
-        norm_asset = NormalizedAsset(
-            path=Path(asset.uri),
-            duration_ms=int(float(probe_data.get("format", {}).get("duration", 0)) * 1000),
-            width=width,
-            height=height,
-            fps=fps_val,
-            has_audio=has_audio,
-            audio_sample_rate=audio_sample_rate,
-            audio_channels=audio_channels,
-            needs_rotation=needs_rotation,
-            is_hdr=is_hdr,
-            is_10bit=is_10bit,
-            needs_deinterlace=needs_deinterlace,
-            needs_even_dimensions=needs_even_dimensions,
-            is_still_image=False,
-            is_vfr=is_vfr,
-            sample_aspect_ratio=video_stream.get("sample_aspect_ratio", "1:1"),
-        )
-
         # Build the filter chain
-        vf_filter = build_normalize_filter(norm_asset)
+        vf_filter = build_normalize_filter(normalized)
 
         # Add video filters if any
         if vf_filter != "null":
