@@ -24,7 +24,7 @@ FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 def run_ffmpeg(args, description):
     """Run ffmpeg command and check result."""
     print(f"  Generating {description}...")
-    cmd = [FFMPEG, "-y", *args]
+    cmd = [FFMPEG, "-y", "-protocol_whitelist", "file,pipe", *args]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  ERROR: {result.stderr}")
@@ -194,6 +194,14 @@ def main():
         "-f", "lavfi", "-i", "testsrc2=s=1920x1080",
         "-frames:v", "1", str(pattern_path)
     ], "Ken Burns pattern image")
+
+    # 13. Landscape marker scene for vertical aspect-fit behavior tests
+    marker_path = fixtures_dir / "marker_left.mp4"
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "color=c=gray:s=1920x1080:r=30:d=2",
+        "-vf", "drawbox=x=200:y=440:w=200:h=200:color=white:t=fill",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(marker_path)
+    ], "left marker for vertical fit tests")
 
     print(f"\nDone! Fixtures created in {fixtures_dir}")
     for f in fixtures_dir.rglob("*"):
