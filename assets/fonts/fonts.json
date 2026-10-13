@@ -1,0 +1,17 @@
+[
+  {
+    "file": "NotoSans-Regular.ttf",
+    "family": "Noto Sans",
+    "sha256": "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823"
+  },
+  {
+    "file": "NotoSans-Bold.ttf",
+    "family": "Noto Sans",
+    "sha256": "1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913"
+  },
+  {
+    "file": "NotoSansDevanagari-Regular.ttf",
+    "family": "Noto Sans Devanagari",
+    "sha256": "4e3c66638958c3e2ab5d37f47a8deb89fffeb7be9985c665a519bbc7ba762313"
+  }
+]
