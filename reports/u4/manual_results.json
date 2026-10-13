@@ -1,0 +1,227 @@
+{
+  "project_id": "p_2b01ea8c",
+  "source_project_id": "p_2b01ea8c",
+  "source_project_duration_ticks": 29633,
+  "runs": [
+    {
+      "profile": "youtube_1080p",
+      "repetition": 1,
+      "wall_seconds": 52.146441699995194,
+      "encoder": {
+        "crf": 18,
+        "preset": "medium",
+        "audio_bitrate": "192k"
+      },
+      "timings": {
+        "prepare": 0.0003548000240698457,
+        "audio": 7.373032199975569,
+        "video": 46.41667609999422,
+        "mux": 1.1430791999446228,
+        "verify": 2.37457970000105,
+        "total": 49.966623899992555
+      },
+      "verify": {
+        "ok": true,
+        "problems": [],
+        "measured": {
+          "width": 1920,
+          "height": 1080,
+          "fps": 30.0,
+          "duration_ms": 29633.333333333332,
+          "video_codec": "h264",
+          "pix_fmt": "yuv420p",
+          "color_primaries": "bt709",
+          "color_trc": "bt709",
+          "colorspace": "bt709",
+          "has_audio": true,
+          "audio_rate": 48000,
+          "audio_channels": 2,
+          "lufs": -14.1,
+          "true_peak": -1.4,
+          "av_drift_ms": -0.3333333333337407,
+          "faststart": true,
+          "black_ranges": []
+        }
+      },
+      "output": "youtube_1080p_b8a936236490.mp4"
+    },
+    {
+      "profile": "youtube_1080p",
+      "repetition": 2,
+      "wall_seconds": 57.21273430000292,
+      "encoder": {
+        "crf": 18,
+        "preset": "medium",
+        "audio_bitrate": "192k"
+      },
+      "timings": {
+        "prepare": 0.0006504000048153102,
+        "audio": 10.674216299958061,
+        "video": 49.295493600016925,
+        "mux": 1.41080749995308,
+        "verify": 3.058898199989926,
+        "total": 53.80781740002567
+      },
+      "verify": {
+        "ok": true,
+        "problems": [],
+        "measured": {
+          "width": 1920,
+          "height": 1080,
+          "fps": 30.0,
+          "duration_ms": 29633.333333333332,
+          "video_codec": "h264",
+          "pix_fmt": "yuv420p",
+          "color_primaries": "bt709",
+          "color_trc": "bt709",
+          "colorspace": "bt709",
+          "has_audio": true,
+          "audio_rate": 48000,
+          "audio_channels": 2,
+          "lufs": -14.1,
+          "true_peak": -1.4,
+          "av_drift_ms": -0.3333333333337407,
+          "faststart": true,
+          "black_ranges": []
+        }
+      },
+      "output": "youtube_1080p_b7c7f009b86e.mp4"
+    },
+    {
+      "profile": "preview_540p",
+      "repetition": 1,
+      "wall_seconds": 17.20130469999276,
+      "encoder": {
+        "crf": 28,
+        "preset": "veryfast",
+        "audio_bitrate": "128k"
+      },
+      "timings": {
+        "prepare": 0.00025209999876096845,
+        "audio": 11.871931699977722,
+        "video": 12.262159900041297,
+        "mux": 1.0377067999797873,
+        "verify": 0.6369310000445694,
+        "total": 13.94874089997029
+      },
+      "verify": {
+        "ok": true,
+        "problems": [],
+        "measured": {
+          "width": 960,
+          "height": 540,
+          "fps": 30.0,
+          "duration_ms": 29633.333333333332,
+          "video_codec": "h264",
+          "pix_fmt": "yuv420p",
+          "color_primaries": "bt709",
+          "color_trc": "bt709",
+          "colorspace": "bt709",
+          "has_audio": true,
+          "audio_rate": 48000,
+          "audio_channels": 2,
+          "lufs": -14.1,
+          "true_peak": -1.1,
+          "av_drift_ms": -0.3333333333337407,
+          "faststart": true,
+          "black_ranges": []
+        }
+      },
+      "output": "preview_540p_3a527a3e774d.mp4"
+    },
+    {
+      "profile": "preview_540p",
+      "repetition": 2,
+      "wall_seconds": 17.760098700004164,
+      "encoder": {
+        "crf": 28,
+        "preset": "veryfast",
+        "audio_bitrate": "128k"
+      },
+      "timings": {
+        "prepare": 0.0002481999690644443,
+        "audio": 12.3745924999821,
+        "video": 12.726199299970176,
+        "mux": 1.0307349999784492,
+        "verify": 0.6251260000281036,
+        "total": 14.393535999988671
+      },
+      "verify": {
+        "ok": true,
+        "problems": [],
+        "measured": {
+          "width": 960,
+          "height": 540,
+          "fps": 30.0,
+          "duration_ms": 29633.333333333332,
+          "video_codec": "h264",
+          "pix_fmt": "yuv420p",
+          "color_primaries": "bt709",
+          "color_trc": "bt709",
+          "colorspace": "bt709",
+          "has_audio": true,
+          "audio_rate": 48000,
+          "audio_channels": 2,
+          "lufs": -14.1,
+          "true_peak": -1.1,
+          "av_drift_ms": -0.3333333333337407,
+          "faststart": true,
+          "black_ranges": []
+        }
+      },
+      "output": "preview_540p_96e1bec092a1.mp4"
+    }
+  ],
+  "title_render": {
+    "wall_seconds": 53.93474729999434,
+    "encoder": {
+      "crf": 18,
+      "preset": "medium",
+      "audio_bitrate": "192k"
+    },
+    "timings": {
+      "prepare": 0.0011171000078320503,
+      "audio": 10.686977000033949,
+      "video": 40.392152399988845,
+      "mux": 0.9927393000107259,
+      "verify": 2.3647403999930248,
+      "total": 43.793017699965276
+    },
+    "verify": {
+      "ok": true,
+      "problems": [],
+      "measured": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 30.0,
+        "duration_ms": 29633.333333333332,
+        "video_codec": "h264",
+        "pix_fmt": "yuv420p",
+        "color_primaries": "bt709",
+        "color_trc": "bt709",
+        "colorspace": "bt709",
+        "has_audio": true,
+        "audio_rate": 48000,
+        "audio_channels": 2,
+        "lufs": -14.1,
+        "true_peak": -1.4,
+        "av_drift_ms": -0.3333333333337407,
+        "faststart": true,
+        "black_ranges": []
+      }
+    },
+    "output": "youtube_1080p_16ff130cc851.mp4",
+    "dimensions": [
+      1920,
+      1080
+    ],
+    "sample_frame_6s_white_pixels": 34380,
+    "visible": true
+  },
+  "timeline": {
+    "duration_ticks": 29633,
+    "video_clips": 55,
+    "music_clips": 1,
+    "mood": "energetic"
+  }
+}

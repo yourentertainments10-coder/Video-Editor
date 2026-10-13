@@ -104,7 +104,8 @@ def _validate(segments, joins, width: int, height: int, fps: int):
 
 
 def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int,
-                         input_seeking: bool = False) -> str:
+                         input_seeking: bool = False,
+                         final_filter: str | None = None) -> str:
     """Create an FFmpeg filter graph for frame-centered joins."""
     media, base_frames, join_frames = _validate(segments, joins, width, height, fps)
     graph = []
@@ -174,8 +175,9 @@ def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int,
             )
         current = out_label
         elapsed_frames += base_frames[index + 1]
+    final_chain = f"{final_filter}," if final_filter else ""
     graph.append(
-        f"[{current}]setparams=range=limited:color_primaries=bt709:"
+        f"[{current}]{final_chain}setparams=range=limited:color_primaries=bt709:"
         "color_trc=bt709:colorspace=bt709[outv]"
     )
     return ";".join(graph)
@@ -194,11 +196,13 @@ def render_sequence_to_file(
     preset: str = "medium",
     audio_bitrate: str = "192k",
     input_seeking: bool = False,
+    final_filter: str | None = None,
+    cwd: Path | None = None,
     cancel: Callable[[], bool] | None = None,
 ) -> Path:
     """Render a deterministic silent H.264 sequence with atomic replacement."""
     graph = build_sequence_graph(segments, joins, width=width, height=height, fps=fps,
-                                 input_seeking=input_seeking)
+                                 input_seeking=input_seeking, final_filter=final_filter)
     media, base_frames, join_frames = _validate(segments, joins, width, height, fps)
     total_frames = sum(base_frames)
     out_path = Path(out_path)
@@ -232,4 +236,4 @@ def render_sequence_to_file(
     if audio_path is not None:
         cmd.extend(["-flags:a", "+bitexact"])
     cmd.append(str(partial))
-    return run_ffmpeg_atomic(cmd, out_path, cancel=cancel, label="transition render")
+    return run_ffmpeg_atomic(cmd, out_path, cancel=cancel, label="transition render", cwd=cwd)

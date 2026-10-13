@@ -203,3 +203,35 @@ def make_thumbnails(
             partial_path.unlink(missing_ok=True)
             raise
     return thumbs
+
+
+def make_audio_preview(asset: MediaAsset, cache_dir: Path) -> Path:
+    """Create a deterministic cached 48 kHz stereo AAC preview."""
+    source = _source_path(asset)
+    normalized = normalize_asset(asset)
+    if not normalized.has_audio:
+        raise ValueError("Media asset has no audio stream")
+    params = {
+        "type": "audio_preview", "codec": "aac", "bitrate": "128k",
+        "sample_rate": 48000, "channels": 2, "format": "m4a",
+        "bitexact": True, "map_metadata": -1,
+    }
+    key = _cache_key(asset, source, params)
+    out_path = Path(cache_dir) / "audio" / f"{key[:16]}.m4a"
+    if out_path.is_file():
+        return out_path
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_path = out_path.with_name(f"{out_path.stem}.{os.getpid()}.partial.m4a")
+    cmd = [FFMPEG_EXE, "-y", "-fflags", "+bitexact", *FFMPEG_NETWORK_SAFE[1:],
+           "-i", str(source), "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "128k",
+           "-ar", "48000", "-ac", "2", "-flags:a", "+bitexact", "-map_metadata", "-1",
+           "-movflags", "+faststart", str(partial_path)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg audio preview encoding failed: {result.stderr}")
+        os.replace(partial_path, out_path)
+    except BaseException:
+        partial_path.unlink(missing_ok=True)
+        raise
+    return out_path

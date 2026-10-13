@@ -1,0 +1,20 @@
+
+> offline-video-editor-ui@1.0.0 test
+> vitest run
+
+
+ RUN  v3.0.5 D:/Python/video editor/ui
+
+ ✓ src/api.test.ts (1 test) 3ms
+ ✓ tests/navigation.test.ts (6 tests) 5ms
+ ✓ tests/ops_fixes.test.ts (3 tests) 5ms
+ ✓ tests/keys.test.ts (4 tests) 6ms
+ ✓ tests/history.test.ts (5 tests) 7ms
+ ✓ tests/autosave.test.ts (1 test) 7ms
+ ✓ tests/ops.test.ts (14 tests) 10ms
+
+ Test Files  7 passed (7)
+      Tests  34 passed (34)
+   Start at  21:02:07
+   Duration  554ms (transform 372ms, setup 0ms, collect 573ms, tests 42ms, environment 2ms, prepare 1.11s)
+

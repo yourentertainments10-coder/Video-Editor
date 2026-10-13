@@ -67,6 +67,7 @@ def _seconds(value: float) -> str:
 def _loudness(path: Path) -> tuple[float | None, float | None]:
     result = subprocess.run(
         [FFMPEG_EXE, "-hide_banner", "-nostats", *FFMPEG_NETWORK_SAFE[1:], "-i", str(path),
+         "-vn",
          "-af", "ebur128=peak=true", "-f", "null", "-"],
         capture_output=True, text=True,
     )

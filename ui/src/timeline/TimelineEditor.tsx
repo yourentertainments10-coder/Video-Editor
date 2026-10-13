@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Asset, thumbnailUrl } from '../api';
-import { addClip, addTextClip, deleteClip, moveClip, snapToFrame, splitAt, Timeline, trimEnd, trimStart } from './ops';
+import { addClip, deleteClip, moveClip, snapToFrame, splitAt, Timeline, trimEnd, trimStart } from './ops';
 
 const tracks = [
   { id: 'video', label: 'Video' }, { id: 'overlay', label: 'Overlay' },
@@ -13,13 +13,20 @@ type Props = {
   playhead: number; onPlayhead: (tick: number) => void;
   onChange: (timeline: Timeline, mode?: 'preview' | 'commit') => void; issues: Array<{ clip_id?: string; message: string }>;
   error: string; onError: (value: string) => void;
+  playing: boolean; onTogglePlay: () => void; timecode: string;
+  onShortcuts: () => void; onRegisterZoomActions: (actions: { zoomIn: () => void; zoomOut: () => void; zoomFit: () => void }) => void;
 };
 
-export function TimelineEditor({ timeline, assets, projectId, selectedId, onSelect, playhead, onPlayhead, onChange, issues, error, onError }: Props) {
+export function TimelineEditor({ timeline, assets, projectId, selectedId, onSelect, playhead, onPlayhead, onChange, issues, error, onError, playing, onTogglePlay, timecode, onShortcuts, onRegisterZoomActions }: Props) {
   const [scale, setScale] = useState(0.1);
   const canvas = useRef<HTMLDivElement>(null);
   const contentWidth = Math.max(1000, timeline.duration_ticks * scale + 400);
   const byId = useMemo(() => new Map(assets.map(asset => [asset.asset_id, asset])), [assets]);
+  useEffect(() => onRegisterZoomActions({
+    zoomIn: () => setScale(value => Math.min(.8, value * 1.15)),
+    zoomOut: () => setScale(value => Math.max(.025, value * .87)),
+    zoomFit: () => setScale(Math.max(.025, Math.min(.8, ((canvas.current?.clientWidth ?? 1000) - 120) / Math.max(1, timeline.duration_ticks)))),
+  }), [timeline.duration_ticks, onRegisterZoomActions]);
   const apply = (fn: () => Timeline) => { try { onChange(fn()); onError(''); } catch (e) { onError(e instanceof Error ? e.message : String(e)); } };
 
   const snapNear = (tick: number, excluding?: string) => {
@@ -61,21 +68,6 @@ export function TimelineEditor({ timeline, assets, projectId, selectedId, onSele
     if (!selectedId) return;
     apply(() => deleteClip(timeline, selectedId)); onSelect(null);
   };
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement | null)?.matches('input,textarea,select,[contenteditable=true]')) return;
-      if (event.ctrlKey || event.altKey || event.metaKey) return;
-      if (event.key.toLowerCase() === 's') { event.preventDefault(); splitSelected(); }
-      else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); deleteSelected(); }
-      else if (event.key.toLowerCase() === 't') {
-        event.preventDefault();
-        apply(() => addTextClip(timeline, 'New title', playhead, `text_${crypto.randomUUID().slice(0, 8)}`, `clip_${crypto.randomUUID().slice(0, 8)}`));
-      }
-    };
-    window.addEventListener('keydown', key);
-    return () => window.removeEventListener('keydown', key);
-  }, [timeline, selectedId, playhead]);
-
   const beginTrim = (event: React.PointerEvent, clipId: string, side: 'start' | 'end') => {
     event.preventDefault(); event.stopPropagation();
     const initial = timeline;
@@ -100,7 +92,13 @@ export function TimelineEditor({ timeline, assets, projectId, selectedId, onSele
 
   const endSec = Math.ceil(timeline.duration_ticks / timeline.time_base.ticks_per_second);
   return <section className="timeline-panel">
-    <div className="timeline-heading"><div><h2>Timeline</h2><span>Drag media into a track · S split · Delete remove · T title</span></div><button className="quiet" onClick={splitSelected} disabled={!selectedId}>Split at playhead</button></div>
+    <div className="timeline-heading"><div><h2>Timeline</h2><span>Drag media into a track · S split · Delete remove · T title</span></div><div className="timeline-transport">
+      <button className="quiet" aria-label={playing ? 'Pause' : 'Play'} onClick={onTogglePlay}>{playing ? 'Ⅱ' : '▶'}</button>
+      <output aria-label="Timecode" className="timecode">{timecode}</output>
+      <button className="quiet" onClick={() => setScale(Math.max(.025, Math.min(.8, ((canvas.current?.clientWidth ?? 1000) - 120) / Math.max(1, timeline.duration_ticks))))} title="Zoom to fit">Fit</button>
+      <button className="quiet" onClick={onShortcuts}>Shortcuts</button>
+      <button className="quiet" onClick={splitSelected} disabled={!selectedId}>Split at playhead</button>
+    </div></div>
     <div className="timeline-scroll" ref={canvas} onWheel={event => { if (event.ctrlKey) { event.preventDefault(); setScale(v => Math.max(.025, Math.min(.8, v * (event.deltaY < 0 ? 1.15 : .87)))); } }}>
       <div className="timeline-canvas" style={{ width: contentWidth + 88 }}>
         <div className="timeline-ruler" style={{ width: contentWidth }} onClick={event => onPlayhead(snapToFrame(timeline, timeAt(event, event.currentTarget)))}>

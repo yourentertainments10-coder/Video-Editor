@@ -5,8 +5,10 @@ from __future__ import annotations
 import math
 import os
 import shutil
-import subprocess
 import tempfile
+import threading
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,9 +21,9 @@ from poc.project_assets import AssetImportError, ProjectAssetLibrary
 from poc.render._process import run_ffmpeg_atomic, run_process
 from poc.render.aspect import fit_to_frame_to_file
 from poc.render.audio import loudness_normalize, render_audio_track
-from poc.render.export import VerifyReport, _measure_input_i, verify_render
+from poc.render.export import ExportProfile, VerifyReport, _measure_input_i, get_profile, verify_render
 from poc.render.effects import build_effect_filters
-from poc.render.text import TextOverlay, burn_text_to_file
+from poc.render.text import TextOverlay, _FONTS_DIR, _ass_filter, _write_ass
 from poc.render.transitions import Join, Segment, render_sequence_to_file
 from poc.timeline import (
     AudioProperties,
@@ -97,6 +99,8 @@ class RenderResult:
     video_clip_order: tuple[str, ...]
     audio_clip_count: int
     report: VerifyReport
+    encoder: dict[str, object]
+    timings: dict[str, float]
 
 
 _TRANSITION_MAP = {
@@ -497,14 +501,21 @@ class EditorRenderer:
 
     def render(self, plan: EditorRenderPlan, *, out: Path,
                progress: Callable[[float, str], None] | None = None,
-               cancel: Callable[[], bool] | None = None) -> RenderResult:
+               cancel: Callable[[], bool] | None = None,
+               profile: ExportProfile | None = None) -> RenderResult:
         out = Path(out)
+        selected = profile or get_profile("youtube_1080p")
+        encoder = {"crf": selected.crf, "preset": selected.preset,
+                   "audio_bitrate": selected.audio_bitrate}
         out.parent.mkdir(parents=True, exist_ok=True)
         self._check_cancel(cancel)
+        total_started = time.perf_counter()
+        timings = {name: 0.0 for name in ("prepare", "audio", "video", "mux", "verify", "total")}
         self._emit(progress, 0.0, "Preparing render")
         try:
             with tempfile.TemporaryDirectory(prefix="editor-render-", dir=out.parent) as tmp_name:
                 temp_dir = Path(tmp_name)
+                prepare_started = time.perf_counter()
                 resolved_segments: list[tuple[VideoSegment, Path]] = []
                 for index, item in enumerate(plan.video_segments):
                     self._check_cancel(cancel)
@@ -517,11 +528,8 @@ class EditorRenderer:
                         right = (plan.video_segments[index + 1].transition_frames
                                  if index + 1 < len(plan.video_segments) else 0)
                         frames = item.duration_frames + left + right
-                        duration_ms = round(frames * 1000 / plan.fps)
-                        still = MediaAsset(
-                            asset_id=item.asset_id, kind="image", uri=str(source),
-                            duration_ms=duration_ms,
-                        )
+                        still = MediaAsset(asset_id=item.asset_id, kind="image", uri=str(source),
+                                           duration_ms=round(frames * 1000 / plan.fps))
                         file = fit_to_frame_to_file(
                             still, temp_dir / f"image_{index:04d}.mp4", plan.width,
                             plan.height, mode="cover", fps=plan.fps, cancel=cancel,
@@ -533,21 +541,17 @@ class EditorRenderer:
                 actual_segments: list[Segment] = []
                 actual_joins: list[Join] = []
                 audio_options: list[dict] = []
-                placement_by_clip = {
-                    p.clip_id: p for p in plan.audio_placements if p.role == "clip"
-                }
+                placement_by_clip = {p.clip_id: p for p in plan.audio_placements if p.role == "clip"}
                 for index, (item, path) in enumerate(resolved_segments):
                     left_frames = item.transition_frames
                     base_ms = round(item.duration_frames * 1000 / plan.fps)
-                    if item.kind == "gap":
-                        source_in = 0
-                    elif item.kind == "image":
-                        source_in = round(left_frames * 1000 / plan.fps)
-                    else:
-                        source_in = int(item.source_in_ms or 0)
-                    source_out = source_in + base_ms
-                    actual_segments.append(Segment(path=path, src_in_ms=source_in,
-                                                   src_out_ms=source_out, vfilter=item.vfilter))
+                    source_in = (0 if item.kind == "gap" else
+                                 round(left_frames * 1000 / plan.fps) if item.kind == "image" else
+                                 int(item.source_in_ms or 0))
+                    actual_segments.append(Segment(
+                        path=path, src_in_ms=source_in, src_out_ms=source_in + base_ms,
+                        vfilter=item.vfilter,
+                    ))
                     placement = placement_by_clip.get(item.clip_id)
                     audio_options.append({
                         "muted": item.kind != "video" or placement is None or placement.muted,
@@ -557,79 +561,119 @@ class EditorRenderer:
                         "fade_out_ms": placement.fade_out_ms if placement else 0,
                     })
                     if index:
-                        if item.transition_in == "cut" or not item.transition_frames:
-                            actual_joins.append(Join("cut", 0))
-                        else:
-                            kind = _TRANSITION_MAP[item.transition_in]
-                            actual_joins.append(Join(
-                                kind, _join_duration_ms(item.transition_frames, plan.fps)
-                            ))
-
-                self._check_cancel(cancel)
-                self._emit(progress, 0.2, "Rendering clip audio")
-                track_wav = render_audio_track(
-                    actual_segments, actual_joins, temp_dir / "track.wav", fps=plan.fps,
-                    segment_audio_options=audio_options, cancel=cancel,
-                )
-                self._check_cancel(cancel)
-                self._emit(progress, 0.35, "Mixing voice and music")
-                mixed_wav = self._mix_placements(
-                    track_wav, plan.audio_placements, temp_dir / "mixed.wav",
-                    duration_ms=plan.duration_ms, cancel=cancel,
-                )
-                self._check_cancel(cancel)
-                self._emit(progress, 0.5, "Normalizing loudness")
-                if _measure_input_i(mixed_wav) <= -70:
-                    final_wav = temp_dir / "final.wav"
-                    shutil.copyfile(mixed_wav, final_wav)
-                else:
-                    final_wav = loudness_normalize(
-                        mixed_wav, temp_dir / "final.wav", target_lufs=-14.0,
-                        true_peak_db=-1.0, cancel=cancel,
-                    )
-                self._check_cancel(cancel)
-                self._emit(progress, 0.68, "Rendering video")
+                        actual_joins.append(
+                            Join("cut", 0) if item.transition_in == "cut" or not item.transition_frames
+                            else Join(_TRANSITION_MAP[item.transition_in],
+                                      _join_duration_ms(item.transition_frames, plan.fps))
+                        )
                 joins = [
                     Join("cut", 0) if item.transition_in == "cut" or not item.transition_frames
                     else Join(_TRANSITION_MAP[item.transition_in],
                               _join_duration_ms(item.transition_frames, plan.fps))
                     for item in plan.video_segments[1:]
                 ]
-                video_path = render_sequence_to_file(
-                    actual_segments, joins, temp_dir / "video.mp4", width=plan.width,
-                    height=plan.height, fps=plan.fps, audio_path=final_wav,
-                    input_seeking=True, cancel=cancel,
-                )
-                self._check_cancel(cancel)
+                ass_filter = None
                 if plan.text_overlays:
-                    self._emit(progress, 0.82, "Burning text overlays")
-                    video_path = burn_text_to_file(
-                        video_path, list(plan.text_overlays), temp_dir / "text.mp4",
-                        cancel=cancel,
+                    ass_path = temp_dir / "overlays.ass"
+                    _write_ass(ass_path, list(plan.text_overlays), plan.width, plan.height)
+                    ass_filter = _ass_filter(Path(ass_path.name))
+                timings["prepare"] = float(time.perf_counter() - prepare_started)
+
+                failed = threading.Event()
+                def cancelled() -> bool:
+                    return failed.is_set() or (cancel is not None and cancel())
+
+                def audio_job() -> Path:
+                    began = time.perf_counter()
+                    track_wav = render_audio_track(
+                        actual_segments, actual_joins, temp_dir / "track.wav", fps=plan.fps,
+                        segment_audio_options=audio_options, cancel=cancelled,
                     )
-                    self._check_cancel(cancel)
-                else:
-                    self._emit(progress, 0.82, "Preparing verification")
-                self._emit(progress, 0.88, "Verifying render")
-                report = verify_render(
-                    video_path, expected_width=plan.width, expected_height=plan.height,
-                    expected_fps=plan.fps, expected_duration_ms=plan.duration_ms,
-                    expect_audio=True, target_lufs=-14.0, true_peak_db=-1.0,
-                )
+                    mixed_wav = self._mix_placements(
+                        track_wav, plan.audio_placements, temp_dir / "mixed.wav",
+                        duration_ms=plan.duration_ms, cancel=cancelled,
+                    )
+                    final_wav = temp_dir / "final.wav"
+                    if _measure_input_i(mixed_wav) <= -70:
+                        shutil.copyfile(mixed_wav, final_wav)
+                    else:
+                        loudness_normalize(
+                            mixed_wav, final_wav, target_lufs=selected.target_lufs,
+                            true_peak_db=selected.true_peak_db, cancel=cancelled,
+                        )
+                    timings["audio"] = float(time.perf_counter() - began)
+                    return final_wav
+
+                def video_job() -> Path:
+                    began = time.perf_counter()
+                    path = render_sequence_to_file(
+                        actual_segments, joins, temp_dir / "video.mp4", width=plan.width,
+                        height=plan.height, fps=plan.fps, audio_path=None,
+                        crf=selected.crf, preset=selected.preset, input_seeking=True,
+                        final_filter=ass_filter, cwd=temp_dir, cancel=cancelled,
+                    )
+                    timings["video"] = float(time.perf_counter() - began)
+                    return path
+
                 self._check_cancel(cancel)
-                self._emit(progress, 0.96, "Writing output")
+                self._emit(progress, 0.1, "Rendering audio and video")
+                with ThreadPoolExecutor(max_workers=2, thread_name_prefix="editor-render") as pool:
+                    audio_future = pool.submit(audio_job)
+                    video_future = pool.submit(video_job)
+                    futures = {audio_future, video_future}
+                    while futures:
+                        done, futures = wait(futures, return_when=FIRST_COMPLETED)
+                        for future in done:
+                            error = future.exception()
+                            if error is not None:
+                                failed.set()
+                                for other in futures:
+                                    other.cancel()
+                                if isinstance(error, InterruptedError):
+                                    raise RenderCancelled("render cancelled") from error
+                                raise error
+                    final_wav = audio_future.result()
+                    video_path = video_future.result()
+
+                self._check_cancel(cancel)
+                self._emit(progress, 0.72, "Muxing")
+                mux_started = time.perf_counter()
+                muxed = temp_dir / "muxed.mp4"
+                mux_cmd = [FFMPEG_EXE, "-y", "-fflags", "+bitexact", *FFMPEG_NETWORK_SAFE[1:],
+                           "-i", str(video_path), "-i", str(final_wav),
+                           "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+                           "-c:a", "aac", "-b:a", selected.audio_bitrate,
+                           "-ar", "48000", "-ac", "2", "-flags:v", "+bitexact",
+                           "-flags:a", "+bitexact", "-map_metadata", "-1",
+                           "-movflags", "+faststart", str(muxed)]
+                run_ffmpeg_atomic(mux_cmd, muxed, cancel=cancel, label="render mux")
+                timings["mux"] = float(time.perf_counter() - mux_started)
+
+                self._check_cancel(cancel)
+                self._emit(progress, 0.86, "Verifying render")
+                verify_started = time.perf_counter()
+                report = verify_render(
+                    muxed, expected_width=plan.width, expected_height=plan.height,
+                    expected_fps=plan.fps, expected_duration_ms=plan.duration_ms,
+                    expect_audio=True, target_lufs=selected.target_lufs,
+                    true_peak_db=selected.true_peak_db,
+                )
+                timings["verify"] = float(time.perf_counter() - verify_started)
+                self._check_cancel(cancel)
                 partial = out.with_name(f"{out.stem}.{os.getpid()}.partial{out.suffix}")
                 try:
-                    shutil.copyfile(video_path, partial)
+                    shutil.copyfile(muxed, partial)
                     os.replace(partial, out)
                 except BaseException:
                     partial.unlink(missing_ok=True)
                     raise
+            timings["total"] = float(time.perf_counter() - total_started)
             self._emit(progress, 1.0, "Render complete")
             return RenderResult(
                 out_path=out, duration_frames=plan.duration_frames,
                 duration_ms=plan.duration_ms, video_clip_order=plan.video_clip_order,
                 audio_clip_count=plan.audio_clip_count, report=report,
+                encoder=encoder, timings=timings,
             )
         except InterruptedError as exc:
             raise RenderCancelled("render cancelled") from exc

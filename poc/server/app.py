@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from poc.decide import CutterError, GridError, cut
 from poc.editor_bridge import legacy_to_editor
 from poc.ingest.normalize import normalize_asset
-from poc.ingest.proxy import make_proxy, make_thumbnails
+from poc.ingest.proxy import make_audio_preview, make_proxy, make_thumbnails
 from poc.perceive.footage import analyze_footage
 from poc.perceive.music import analyze_music
 from poc.project_assets import AssetImportError, ProjectAssetLibrary
@@ -149,7 +149,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             header_ok = secrets.compare_digest(request.headers.get("x-editor-token", ""), token)
             cookie_media = (
                 request.method == "GET"
-                and re.fullmatch(r"/api/projects/p_[0-9a-f]{8}/assets/[^/]+/(?:proxy|thumbnails/\d+)", request.url.path)
+                and re.fullmatch(r"/api/projects/p_[0-9a-f]{8}/assets/[^/]+/(?:proxy|audio|thumbnails/\d+)", request.url.path)
             )
             cookie_ok = cookie_media and secrets.compare_digest(
                 request.cookies.get("editor_session", ""), token
@@ -256,6 +256,17 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         except (AssetImportError, FileNotFoundError, ValueError) as exc:
             raise HTTPException(404, "asset not found or cannot be proxied") from exc
         return _range_file_response(path, range_header, "video/mp4")
+
+    @app.get("/api/projects/{pid}/assets/{aid}/audio")
+    def asset_audio(pid: str, aid: str, range_header: str | None = Header(default=None, alias="Range")):
+        root = _project_root(data_dir, pid)
+        library = _library(root)
+        try:
+            asset = library.asset(aid).media_asset
+            path = make_audio_preview(asset, data_dir / "cache")
+        except (AssetImportError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(404, "asset has no audio preview") from exc
+        return _range_file_response(path, range_header, "audio/mp4")
 
     @app.get("/api/projects/{pid}/assets/{aid}/thumbnails/{n}")
     def asset_thumbnail(pid: str, aid: str, n: int):
@@ -394,6 +405,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         record = {
             "job_id": job_id, "project_id": pid, "status": "queued", "progress": 0.0,
             "message": "Queued", "output": None, "report": None, "error": None,
+            "encoder": None, "timings": None,
             "cancel": threading.Event(), "kind": "auto_edit",
         }
         with app.state.job_lock:
@@ -481,6 +493,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         root = _project_root(data_dir, pid)
         record = {"job_id": job_id, "project_id": pid, "status": "queued", "progress": 0.0,
                   "message": "Queued", "output": None, "report": None, "error": None,
+                  "encoder": None, "timings": None,
                   "cancel": threading.Event()}
         with app.state.job_lock:
             app.state.jobs[job_id] = record
@@ -508,7 +521,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
                         record["progress"] = float(value)
                         record["message"] = message
                 result = EditorRenderer().render(plan, out=output, progress=progress,
-                                                  cancel=record["cancel"].is_set)
+                                                  cancel=record["cancel"].is_set, profile=selected)
                 if record["cancel"].is_set():
                     output.unlink(missing_ok=True)
                     with app.state.job_lock:
@@ -517,7 +530,8 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
                 with app.state.job_lock:
                     record.update(status="done", progress=1.0, message="Render complete",
                                   output=str(result.out_path), report={"ok": result.report.ok,
-                                  "problems": result.report.problems, "measured": result.report.measured})
+                                  "problems": result.report.problems, "measured": result.report.measured},
+                                  encoder=result.encoder, timings=result.timings)
             except RenderCancelled:
                 if partial_output:
                     partial_output.unlink(missing_ok=True)
@@ -548,7 +562,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             record = app.state.jobs.get(jid)
             if record is None:
                 raise HTTPException(404, "job not found")
-            return {key: record[key] for key in ("job_id", "status", "progress", "message", "output", "report", "error")}
+            return {key: record[key] for key in ("job_id", "status", "progress", "message", "output", "report", "error", "encoder", "timings")}
 
     @app.post("/api/jobs/{jid}/cancel", status_code=202)
     def cancel_job(jid: str):

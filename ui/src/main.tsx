@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, Asset, EditorCatalogue, Job, json, Project, saveTimeline, thumbnailUrl } from './api';
+import { api, Asset, assetAudioUrl, assetProxyUrl, EditorCatalogue, Job, json, Project, saveTimeline, thumbnailUrl } from './api';
 import { Inspector } from './timeline/Inspector';
 import { TimelineEditor } from './timeline/TimelineEditor';
-import { Timeline, TimelineClip } from './timeline/ops';
+import { addTextClip, deleteClip, splitAt, Timeline, TimelineClip } from './timeline/ops';
 import { AutoEditDialog } from './timeline/AutoEditDialog';
 import { canRedo, canUndo, createHistory, History, push, redo, undo } from './timeline/history';
+import { commandForKey } from './timeline/keys';
+import { formatTimecode, nextEditPoint, playbackSource, stepFrames } from './timeline/navigation';
 import './style.css';
 
 const profiles = ['preview_540p', 'youtube_1080p', 'reels_9x16', 'square_1x1'];
@@ -19,6 +21,9 @@ function App() {
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [playhead, setPlayhead] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [seekSerial, setSeekSerial] = useState(0);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const [profile, setProfile] = useState('preview_540p');
   const [job, setJob] = useState<Job | null>(null);
   const [previewRender, setPreviewRender] = useState('');
@@ -40,6 +45,10 @@ function App() {
   const autoEditJob = useRef(false);
   const historyRef = useRef<History<Timeline> | null>(null);
   const coalesceRef = useRef<{ key: string; timer: number } | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const playbackClock = useRef<{ wall: number; tick: number }>({ wall: 0, tick: 0 });
+  const zoomActions = useRef<{ zoomIn: () => void; zoomOut: () => void; zoomFit: () => void } | null>(null);
 
   const refreshProjects = async () => setProjects((await api<{ projects: Project[] }>('/api/projects')).projects);
   const runCheck = async (pid: string) => {
@@ -60,6 +69,7 @@ function App() {
       setAssets(assetResult.assets); setTimeline(saved.timeline); setRevision(saved.revision); setCatalogue(catalog);
       const initialHistory = createHistory(saved.timeline); historyRef.current = initialHistory; setHistory(initialHistory);
       setIssues([]); setSaveMessage('Saved'); setPlayhead(0);
+      setPlaying(false); setSeekSerial(value => value + 1);
       await runCheck(value.project_id);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setSaveMessage(''); }
   };
@@ -175,18 +185,123 @@ function App() {
   };
   const undoEdit = () => travelHistory(undo);
   const redoEdit = () => travelHistory(redo);
+  const registerZoomActions = (actions: { zoomIn: () => void; zoomOut: () => void; zoomFit: () => void }) => { zoomActions.current = actions; };
+  const seekTo = (tick: number) => {
+    const next = Math.max(0, Math.min(timeline?.duration_ticks ?? 0, tick));
+    setPlayhead(next);
+    setSeekSerial(value => value + 1);
+    if (playing && timeline) playbackClock.current = { wall: performance.now(), tick: next };
+  };
+  const togglePlayback = () => {
+    if (playing) { setPlaying(false); return; }
+    const start = timeline && playhead >= timeline.duration_ticks ? 0 : playhead;
+    playbackClock.current = { wall: performance.now(), tick: start };
+    if (start !== playhead) { setPlayhead(start); setSeekSerial(value => value + 1); }
+    setPlaying(true);
+  };
+  const videoSource = timeline ? playbackSource(timeline, 'video', playhead) : null;
+  const musicSource = timeline ? playbackSource(timeline, 'music', playhead) : null;
+  const playbackVideoUrl = project && videoSource ? assetProxyUrl(project.project_id, videoSource.asset_id) : '';
+  const playbackAudioUrl = project && musicSource ? assetAudioUrl(project.project_id, musicSource.asset_id) : '';
+  const nextVideoSource = timeline && videoSource
+    ? playbackSource(timeline, 'video', Math.min(timeline.duration_ticks, videoSource.clip_end_tick)) : null;
+  const nextVideoUrl = project && nextVideoSource ? assetProxyUrl(project.project_id, nextVideoSource.asset_id) : '';
+
+  useEffect(() => {
+    if (!playing || !timeline) return;
+    let frame = 0;
+    const advance = (now: number) => {
+      const clock = playbackClock.current;
+      const tick = Math.min(timeline.duration_ticks,
+        clock.tick + (now - clock.wall) * timeline.time_base.ticks_per_second / 1000);
+      setPlayhead(tick);
+      const audio = audioRef.current;
+      const source = playbackSource(timeline, 'music', tick);
+      if (audio && source) {
+        const expected = source.source_ms / 1000;
+        if (Math.abs(audio.currentTime - expected) > 0.1) audio.currentTime = expected;
+        if (audio.paused) void audio.play().catch(() => undefined);
+      } else if (audio && !audio.paused) audio.pause();
+      if (tick >= timeline.duration_ticks) { setPlaying(false); return; }
+      frame = requestAnimationFrame(advance);
+    };
+    frame = requestAnimationFrame(advance);
+    return () => cancelAnimationFrame(frame);
+  }, [playing, timeline]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoSource) return;
+    video.currentTime = Math.max(0, videoSource.source_ms / 1000);
+    if (playing) void video.play().catch(() => undefined);
+    else video.pause();
+  }, [videoSource?.clip_id, playbackVideoUrl, seekSerial, playing]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (musicSource) {
+      audio.currentTime = Math.max(0, musicSource.source_ms / 1000);
+      if (playing) void audio.play().catch(() => undefined);
+      else audio.pause();
+    } else audio.pause();
+  }, [musicSource?.clip_id, playbackAudioUrl, seekSerial, playing]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if ((event.target as HTMLElement | null)?.matches('input,textarea,select,[contenteditable=true]')) return;
-      const mod = event.ctrlKey || event.metaKey;
-      if (mod && event.key.toLowerCase() === 's') { event.preventDefault(); return; }
-      if (mod && event.key.toLowerCase() === 'z') {
-        event.preventDefault(); event.shiftKey ? redoEdit() : undoEdit();
-      } else if (mod && event.key.toLowerCase() === 'y') { event.preventDefault(); redoEdit(); }
+      const command = commandForKey(event);
+      if (!command) return;
+      event.preventDefault();
+      if (!timeline) return;
+      const fps = timeline.settings.fps_num / timeline.settings.fps_den;
+      switch (command) {
+        case 'playPause': togglePlayback(); break;
+        case 'prevFrame': seekTo(stepFrames(timeline, playhead, -1)); break;
+        case 'nextFrame': seekTo(stepFrames(timeline, playhead, 1)); break;
+        case 'back1s': seekTo(stepFrames(timeline, playhead, -Math.round(fps))); break;
+        case 'forward1s': seekTo(stepFrames(timeline, playhead, Math.round(fps))); break;
+        case 'prevEdit': seekTo(nextEditPoint(timeline, playhead, -1)); break;
+        case 'nextEdit': seekTo(nextEditPoint(timeline, playhead, 1)); break;
+        case 'home': seekTo(0); break;
+        case 'end': seekTo(timeline.duration_ticks); break;
+        case 'split': if (selectedClipId) {
+          try { updateTimeline(splitAt(timeline, selectedClipId, playhead, `clip_${crypto.randomUUID().slice(0, 8)}`)); setTimelineError(''); }
+          catch (e) { setTimelineError(e instanceof Error ? e.message : String(e)); }
+        } break;
+        case 'addText':
+          try { updateTimeline(addTextClip(timeline, 'New title', playhead, `text_${crypto.randomUUID().slice(0, 8)}`, `clip_${crypto.randomUUID().slice(0, 8)}`)); setTimelineError(''); }
+          catch (e) { setTimelineError(e instanceof Error ? e.message : String(e)); }
+          break;
+        case 'delete': if (selectedClipId) {
+          try { updateTimeline(deleteClip(timeline, selectedClipId)); setSelectedClipId(null); setTimelineError(''); }
+          catch (e) { setTimelineError(e instanceof Error ? e.message : String(e)); }
+        } break;
+        case 'undo': undoEdit(); break;
+        case 'redo': redoEdit(); break;
+        case 'zoomIn': zoomActions.current?.zoomIn(); break;
+        case 'zoomOut': zoomActions.current?.zoomOut(); break;
+        case 'zoomFit': zoomActions.current?.zoomFit(); break;
+        case 'saveNow': {
+          if (!project || !dirty.current || saveInFlight.current) { setSaveCycle(value => value + 1); break; }
+          const pid = project.project_id;
+          const pending = timeline;
+          saveInFlight.current = true; dirty.current = false; setSaveMessage('Saving…');
+          void saveTimeline(pid, revision, pending).then(async result => {
+            if (result.conflict) {
+              setTimeline(result.saved.timeline); setRevision(result.saved.revision); setIssues([]);
+              const reset = createHistory(result.saved.timeline); historyRef.current = reset; setHistory(reset);
+              setSaveMessage('Timeline changed elsewhere — reloaded');
+            } else { setRevision(result.revision); setIssues(result.issues); setSaveMessage('Saved'); }
+            await runCheck(pid);
+          }).catch(e => { dirty.current = true; setSaveMessage('Save failed'); setError(e instanceof Error ? e.message : String(e)); })
+            .finally(() => { saveInFlight.current = false; setSaveCycle(value => value + 1); });
+          break;
+        }
+      }
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  });
+  }, [timeline, playhead, playing, selectedClipId, project, revision]);
   const startAutoEdit = async (request: { musicAssetId: string; mood: 'energetic' | 'calm'; durationS: number; videoAssetIds: string[] }) => {
     if (!project || !timeline) return;
     setAutoEditError(null);
@@ -240,10 +355,12 @@ function App() {
             <button className="quiet" onClick={redoEdit} disabled={!history || !canRedo(history)} title="Redo (Ctrl+Shift+Z / Ctrl+Y)">Redo</button></div>
             {autoEditError && <span className="error-text" role="alert">{autoEditError}</span>}
           </div>
-          <TimelineEditor timeline={timeline} assets={assets} projectId={project.project_id} selectedId={selectedClipId} onSelect={setSelectedClipId} playhead={playhead} onPlayhead={setPlayhead} onChange={updateTimeline} issues={issues} error={timelineError} onError={setTimelineError}/>
+          <TimelineEditor timeline={timeline} assets={assets} projectId={project.project_id} selectedId={selectedClipId} onSelect={setSelectedClipId} playhead={playhead} onPlayhead={seekTo} onChange={updateTimeline} issues={issues} error={timelineError} onError={setTimelineError} playing={playing} onTogglePlay={togglePlayback} timecode={formatTimecode(timeline, playhead)} onShortcuts={() => setShowShortcuts(true)} onRegisterZoomActions={registerZoomActions}/>
           <div className="editor-workbench">
-            <section className="panel preview-panel"><div className="section-head"><div><h2>Preview</h2><span>{previewRender ? 'Quick preview render' : selectedAsset?.file_name ?? 'Select a media item'}</span></div><span className="panel-dot"/></div>
-              {previewUrl && selectedAsset?.kind !== 'image' ? <video key={previewUrl} src={previewUrl} controls autoPlay={!!previewRender}/> : previewUrl ? <img className="still-preview" src={previewUrl} alt="Selected still"/> : <div className="preview-empty"><span>▶</span><p>Select a video to preview</p></div>}
+            <section className="panel preview-panel"><div className="section-head"><div><h2>Preview</h2><span>{previewRender ? 'Quick preview render' : 'Rough preview — transitions, effects and titles show in Quick preview render'}</span></div><span className="panel-dot"/></div>
+              {previewRender ? <video key={previewUrl} src={previewUrl} controls autoPlay/> : videoSource ? <video ref={videoRef} key={videoSource.clip_id} src={playbackVideoUrl} preload="auto" muted playsInline/> : timeline.clips.some(clip => clip.track_id === 'video') ? <div className="preview-black" aria-label="Black gap"/> : previewUrl && selectedAsset?.kind !== 'image' ? <video key={previewUrl} src={previewUrl} controls/> : previewUrl ? <img className="still-preview" src={previewUrl} alt="Selected still"/> : <div className="preview-empty"><span>▶</span><p>Select a video to preview</p></div>}
+              {nextVideoUrl && nextVideoSource?.clip_id !== videoSource?.clip_id && <video className="preview-preload" src={nextVideoUrl} preload="auto" muted aria-hidden="true"/>}
+              <audio ref={audioRef} src={playbackAudioUrl || undefined} preload="auto" />
               <button className="quiet preview-render" disabled={!readiness?.ok || checking || job?.status === 'running'} onClick={() => void startRender(true)}>Quick preview render</button>
             </section>
             <Inspector timeline={timeline} clip={selectedClip} catalogue={catalogue} onChange={updateTimeline} onCoalesceEnd={endCoalesce}/>
@@ -254,7 +371,7 @@ function App() {
               {!job || ['done', 'failed', 'cancelled'].includes(job.status) ? <button className="primary render-button" onClick={() => void startRender(false)} disabled={!readiness?.ok || checking}>{readiness?.ok ? 'Render video' : 'Resolve timeline issues'}</button> : <>
                 <div className="job-line"><span>{job.message}</span><strong>{Math.round(job.progress * 100)}%</strong></div><div className="progress"><i style={{ width: `${job.progress * 100}%` }}/></div><button className="quiet cancel" onClick={() => void cancel()}>Cancel render</button>
               </>}
-              {job?.status === 'done' && <div className="job-result"><strong className={job.report?.ok ? 'good' : 'bad'}>{job.report?.ok ? '✓ Render verified' : '⚠ Verification found issues'}</strong>{job.report?.problems.map(problem => <small key={problem}>{problem}</small>)}<button className="quiet" onClick={() => void reveal()}>Show in folder ↗</button></div>}
+              {job?.status === 'done' && <div className="job-result"><strong className={job.report?.ok ? 'good' : 'bad'}>{job.report?.ok ? '✓ Render verified' : '⚠ Verification found issues'}</strong>{job.report?.problems.map(problem => <small key={problem}>{problem}</small>)}{job.timings?.total !== undefined && <small>Render time: {job.timings.total.toFixed(1)} s · preset {job.encoder?.preset ?? 'unknown'}</small>}<button className="quiet" onClick={() => void reveal()}>Show in folder ↗</button></div>}
               {job?.error && <p className="error-text">{job.error}</p>}
             </section>
           </div>
@@ -268,6 +385,10 @@ function App() {
       onStart={request => void startAutoEdit(request)}
       onCancel={() => { if (job) void api(`/api/jobs/${job.job_id}/cancel`, json('POST', {})); }}
       onClose={() => { setShowAutoEdit(false); setAutoEditError(null); }}/ >}
+    {showShortcuts && <div className="modal-backdrop" role="presentation" onClick={() => setShowShortcuts(false)}><section className="panel shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" onClick={event => event.stopPropagation()}>
+      <div className="section-head"><h2 id="shortcuts-title">Shortcuts</h2><button className="quiet" onClick={() => setShowShortcuts(false)}>Close</button></div>
+      <dl>{[['Space', 'Play / pause'], ['← / →', 'Step one frame'], ['Shift + ← / →', 'Back / forward 1 second'], ['↑ / ↓', 'Previous / next edit point'], ['Home / End', 'Timeline start / end'], ['S', 'Split selected clip'], ['T', 'Add text clip'], ['Delete / Backspace', 'Delete selected clip'], ['Ctrl / ⌘ + Z', 'Undo'], ['Ctrl / ⌘ + Shift + Z or Ctrl + Y', 'Redo'], ['= / +', 'Zoom in'], ['-', 'Zoom out'], ['\\', 'Zoom to fit'], ['Ctrl / ⌘ + S', 'Save now']].map(([key, action]) => <React.Fragment key={key}><dt>{key}</dt><dd>{action}</dd></React.Fragment>)}</dl>
+    </section></div>}
   </main>;
 }
 

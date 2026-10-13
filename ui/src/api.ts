@@ -8,6 +8,8 @@ export type Asset = {
 export type Job = {
   job_id: string; status: string; progress: number; message: string; output: string | null;
   report: { ok: boolean; problems: string[]; measured: Record<string, unknown> } | null; error: string | null;
+  encoder?: { crf: number; preset: string; audio_bitrate: string } | null;
+  timings?: Record<string, number> | null;
 };
 export type CatalogueField = {
   name: string; value_type: string; required: boolean; default: string | number | null;
@@ -60,4 +62,5 @@ export async function saveTimeline(pid: string, baseRevision: number, timeline: 
 }
 
 export const assetProxyUrl = (pid: string, aid: string) => `/api/projects/${pid}/assets/${aid}/proxy`;
+export const assetAudioUrl = (pid: string, aid: string) => `/api/projects/${pid}/assets/${aid}/audio`;
 export const thumbnailUrl = (pid: string, aid: string, index = 0) => `/api/projects/${pid}/assets/${aid}/thumbnails/${index}`;

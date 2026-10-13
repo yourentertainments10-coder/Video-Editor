@@ -1,0 +1,4 @@
+
+> offline-video-editor-ui@1.0.0 typecheck
+> tsc --noEmit
+
