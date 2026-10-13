@@ -82,6 +82,9 @@ FORBIDDEN_DISTRIBUTIONS: set[str] = {
     "aiohttp",
 }
 
+# TestClient's test-only transport is allowed as a dev extra; product runtime code never imports httpx.
+ALLOWED_DEV_DISTRIBUTIONS: dict[str, str] = {"httpx": "FastAPI TestClient transport for tests only"}
+
 # Directories never scanned (environments, generated output, non-product code).
 SKIP_DIRS: set[str] = {
     ".git", ".venv", "venv", "env", "__pycache__", "node_modules", "build",
@@ -166,25 +169,25 @@ def _normalize_dist(spec: str) -> str | None:
 
 def scan_dependencies(root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    specs: list[tuple[str, str]] = []  # (source file, spec)
+    specs: list[tuple[str, str, bool]] = []  # (source file, spec, is development extra)
 
     pyproject = root / "pyproject.toml"
     if pyproject.is_file() and tomllib is not None:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
         project = data.get("project", {})
-        specs += [("pyproject.toml", s) for s in project.get("dependencies", [])]
-        for group in project.get("optional-dependencies", {}).values():
-            specs += [("pyproject.toml", s) for s in group]
+        for group_name, group in project.get("optional-dependencies", {}).items():
+            specs += [("pyproject.toml", s, group_name == "dev") for s in group]
+        specs += [("pyproject.toml", s, False) for s in project.get("dependencies", [])]
 
     for req in sorted(root.glob("requirements*.txt")):
         for raw in req.read_text(encoding="utf-8").splitlines():
             line = raw.split("#", 1)[0].strip()
             if line and not line.startswith("-"):
-                specs.append((req.name, line))
+                specs.append((req.name, line, False))
 
-    for source, spec in specs:
+    for source, spec, is_dev in specs:
         name = _normalize_dist(spec)
-        if name in FORBIDDEN_DISTRIBUTIONS:
+        if name in FORBIDDEN_DISTRIBUTIONS and not (is_dev and name in ALLOWED_DEV_DISTRIBUTIONS):
             findings.append(Finding(source, 0, "FORBIDDEN_DEPENDENCY", spec))
     return findings
 
