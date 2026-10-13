@@ -23,7 +23,9 @@ export function TimelineEditor({ timeline, assets, projectId, selectedId, onSele
   const apply = (fn: () => Timeline) => { try { onChange(fn()); onError(''); } catch (e) { onError(e instanceof Error ? e.message : String(e)); } };
 
   const snapNear = (tick: number, excluding?: string) => {
-    const targets = [playhead, ...timeline.clips.filter(c => c.clip_id !== excluding).flatMap(c => [c.start_tick, c.start_tick + c.duration_ticks])];
+    const targets = [playhead,
+      ...timeline.markers.filter(marker => marker.kind === 'beat').map(marker => marker.position_tick),
+      ...timeline.clips.filter(c => c.clip_id !== excluding).flatMap(c => [c.start_tick, c.start_tick + c.duration_ticks])];
     const close = targets.find(t => Math.abs((t - tick) * scale) <= 8);
     return snapToFrame(timeline, close ?? tick);
   };
@@ -94,6 +96,9 @@ export function TimelineEditor({ timeline, assets, projectId, selectedId, onSele
       <div className="timeline-canvas" style={{ width: contentWidth + 88 }}>
         <div className="timeline-ruler" style={{ width: contentWidth }} onClick={event => onPlayhead(snapToFrame(timeline, timeAt(event, event.currentTarget)))}>
           {Array.from({ length: endSec + 2 }, (_, second) => <span key={second} style={{ left: second * timeline.time_base.ticks_per_second * scale }}>{second}s</span>)}
+          {timeline.markers.filter(marker => marker.kind === 'beat').map(marker => <i key={marker.marker_id}
+            className={`beat-marker ${marker.label === 'downbeat' ? 'downbeat' : ''}`}
+            style={{ left: marker.position_tick * scale }} title={marker.label ?? 'Beat'} />)}
           <i className="playhead" style={{ left: playhead * scale }} />
         </div>
         {tracks.map(track => <div className="track-row" key={track.id}>

@@ -19,8 +19,12 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from poc.decide import CutterError, GridError, cut
+from poc.editor_bridge import legacy_to_editor
 from poc.ingest.normalize import normalize_asset
 from poc.ingest.proxy import make_proxy, make_thumbnails
+from poc.perceive.footage import analyze_footage
+from poc.perceive.music import analyze_music
 from poc.project_assets import AssetImportError, ProjectAssetLibrary
 from poc.render.editor import EditorRenderer, RenderCancelled
 from poc.render.export import EXPORT_PROFILES, get_profile
@@ -93,6 +97,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
     app.state.data_dir = data_dir
     app.state.jobs: dict[str, dict[str, Any]] = {}
     app.state.job_lock = threading.RLock()
+    app.state.timeline_lock = threading.RLock()
     app.state.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="editor-render")
     app.state.asset_probe_cache = {}
     app.state.asset_probe_lock = threading.Lock()
@@ -290,9 +295,16 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         except (ValidationError, KeyError, TypeError, AttributeError) as exc:
             raise HTTPException(422, str(exc)) from exc
         violations = validate_editor_timeline(timeline)
-        timeline.save(root / "timeline.json")
-        library.project = library.project.model_copy(update={"timeline": timeline})
-        library.save()
+        with app.state.timeline_lock:
+            latest = EditorTimeline.load(root / "timeline.json")
+            if latest.revision != base:
+                raise HTTPException(409, "timeline revision conflict")
+            timeline = timeline.model_copy(update={
+                "revision": latest.revision + 1, "parent_revision": latest.revision,
+            })
+            timeline.save(root / "timeline.json")
+            library.project = library.project.model_copy(update={"timeline": timeline})
+            library.save()
         return {
             "revision": timeline.revision,
             "violations": [item.code for item in violations],
@@ -320,6 +332,141 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "error": None}
+
+    @app.post("/api/projects/{pid}/auto-edit", status_code=202)
+    def auto_edit(pid: str, body: dict[str, Any]):
+        root = _project_root(data_dir, pid)
+        current = EditorTimeline.load(root / "timeline.json")
+        base_revision = body.get("base_revision")
+        if not isinstance(base_revision, int) or isinstance(base_revision, bool):
+            raise HTTPException(422, "base_revision must be an integer")
+        if base_revision != current.revision:
+            raise HTTPException(409, "timeline revision conflict")
+
+        mood = body.get("mood")
+        duration_s = body.get("duration_s")
+        music_asset_id = body.get("music_asset_id")
+        video_asset_ids = body.get("video_asset_ids")
+        if mood not in {"energetic", "calm"}:
+            raise HTTPException(422, "mood must be 'energetic' or 'calm'")
+        if isinstance(duration_s, bool) or not isinstance(duration_s, (int, float)) or duration_s <= 0:
+            raise HTTPException(422, "duration_s must be greater than zero")
+        if not isinstance(music_asset_id, str) or not music_asset_id:
+            raise HTTPException(422, "music_asset_id is required")
+        if video_asset_ids is not None and (
+            not isinstance(video_asset_ids, list)
+            or not all(isinstance(asset_id, str) for asset_id in video_asset_ids)
+        ):
+            raise HTTPException(422, "video_asset_ids must be a list of asset ids")
+
+        library = _library(root)
+        try:
+            music_asset = library.asset(music_asset_id)
+        except AssetImportError as exc:
+            raise HTTPException(422, f"music asset not found: {music_asset_id}") from exc
+        if music_asset.kind not in {"audio", "music"}:
+            raise HTTPException(422, "music_asset_id must identify an audio asset")
+
+        if video_asset_ids is None:
+            video_assets = [asset for asset in library.project.assets if asset.kind == "video"]
+        else:
+            video_assets = []
+            for asset_id in video_asset_ids:
+                try:
+                    asset = library.asset(asset_id)
+                except AssetImportError as exc:
+                    raise HTTPException(422, f"video asset not found: {asset_id}") from exc
+                if asset.kind != "video":
+                    raise HTTPException(422, f"asset {asset_id!r} is not a video")
+                if asset not in video_assets:
+                    video_assets.append(asset)
+        if not video_assets:
+            raise HTTPException(422, "auto-edit requires at least one video asset")
+
+        job_id = uuid.uuid4().hex[:12]
+        record = {
+            "job_id": job_id, "project_id": pid, "status": "queued", "progress": 0.0,
+            "message": "Queued", "output": None, "report": None, "error": None,
+            "cancel": threading.Event(), "kind": "auto_edit",
+        }
+        with app.state.job_lock:
+            app.state.jobs[job_id] = record
+
+        def work_auto_edit():
+            def update(status: str, progress: float, message: str):
+                with app.state.job_lock:
+                    record.update(status=status, progress=progress, message=message)
+
+            try:
+                if record["cancel"].is_set():
+                    update("cancelled", 0.0, "Cancelled")
+                    return
+                update("running", 0.02, "Analysing music")
+                music_map = analyze_music(
+                    music_asset.source_path, cache_dir=data_dir / "analysis-cache",
+                )
+                if record["cancel"].is_set():
+                    update("cancelled", 0.1, "Cancelled")
+                    return
+
+                footage_maps = {}
+                source_to_asset_id = {}
+                for index, asset in enumerate(video_assets):
+                    update("running", 0.1 + 0.45 * index / len(video_assets), "Analysing footage")
+                    source = Path(asset.source_path).resolve()
+                    footage_maps[str(source)] = analyze_footage(
+                        source, cache_dir=data_dir / "analysis-cache",
+                    )
+                    source_to_asset_id[source] = asset.asset_id
+                    if record["cancel"].is_set():
+                        update("cancelled", 0.55, "Cancelled")
+                        return
+
+                update("running", 0.6, "Cutting")
+                legacy = cut(
+                    music_map, music_asset.source_path, footage_maps, mood, float(duration_s),
+                )
+                if record["cancel"].is_set():
+                    update("cancelled", 0.75, "Cancelled")
+                    return
+
+                update("running", 0.85, "Saving")
+                refreshed_library = _library(root)
+                editor_timeline = legacy_to_editor(
+                    legacy,
+                    library=refreshed_library,
+                    source_to_asset_id=source_to_asset_id,
+                    music_asset_id=music_asset_id,
+                    settings=current.settings,
+                )
+                with app.state.timeline_lock:
+                    latest = EditorTimeline.load(root / "timeline.json")
+                    if latest.revision != base_revision:
+                        raise RuntimeError(
+                            f"timeline conflict: revision changed from {base_revision} to {latest.revision}"
+                        )
+                    editor_timeline = editor_timeline.model_copy(update={
+                        "revision": latest.revision + 1,
+                        "parent_revision": latest.revision,
+                    })
+                    editor_timeline.save(root / "timeline.json")
+                    refreshed_library.project = refreshed_library.project.model_copy(
+                        update={"timeline": editor_timeline},
+                    )
+                    refreshed_library.save()
+                update("done", 1.0, "Auto-edit complete")
+            except (CutterError, GridError, Exception) as exc:
+                with app.state.job_lock:
+                    if record["cancel"].is_set():
+                        record.update(status="cancelled", message="Cancelled")
+                    else:
+                        record.update(
+                            status="failed", message="Auto-edit failed",
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+
+        app.state.executor.submit(work_auto_edit)
+        return {"job_id": job_id}
 
     def start_job(pid: str, profile: str) -> str:
         job_id = uuid.uuid4().hex[:12]

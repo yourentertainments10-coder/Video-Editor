@@ -4,6 +4,8 @@ import { api, Asset, EditorCatalogue, Job, json, Project, saveTimeline, thumbnai
 import { Inspector } from './timeline/Inspector';
 import { TimelineEditor } from './timeline/TimelineEditor';
 import { Timeline, TimelineClip } from './timeline/ops';
+import { AutoEditDialog } from './timeline/AutoEditDialog';
+import { canRedo, canUndo, createHistory, History, push, redo, undo } from './timeline/history';
 import './style.css';
 
 const profiles = ['preview_540p', 'youtube_1080p', 'reels_9x16', 'square_1x1'];
@@ -27,8 +29,13 @@ function App() {
   const [issues, setIssues] = useState<Array<{ code: string; message: string; clip_id?: string }>>([]);
   const [readiness, setReadiness] = useState<{ ok: boolean; error: string | null } | null>(null);
   const [checking, setChecking] = useState(false);
+  const [showAutoEdit, setShowAutoEdit] = useState(false);
+  const [autoEditError, setAutoEditError] = useState<string | null>(null);
+  const [history, setHistory] = useState<History<Timeline> | null>(null);
   const dirty = useRef(false);
   const previewJob = useRef(false);
+  const autoEditJob = useRef(false);
+  const historyRef = useRef<History<Timeline> | null>(null);
 
   const refreshProjects = async () => setProjects((await api<{ projects: Project[] }>('/api/projects')).projects);
   const runCheck = async (pid: string) => {
@@ -47,6 +54,7 @@ function App() {
         api<EditorCatalogue>('/api/catalogue'),
       ]);
       setAssets(assetResult.assets); setTimeline(saved.timeline); setRevision(saved.revision); setCatalogue(catalog);
+      const initialHistory = createHistory(saved.timeline); historyRef.current = initialHistory; setHistory(initialHistory);
       setIssues([]); setSaveMessage('Saved'); setPlayhead(0);
       await runCheck(value.project_id);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setSaveMessage(''); }
@@ -65,6 +73,7 @@ function App() {
         const result = await saveTimeline(pid, revision, pending);
         if (result.conflict) {
           setTimeline(result.saved.timeline); setRevision(result.saved.revision); setIssues([]);
+          const reset = createHistory(result.saved.timeline); historyRef.current = reset; setHistory(reset);
           setSaveMessage('Timeline changed elsewhere — reloaded');
           await runCheck(pid);
         } else {
@@ -79,8 +88,24 @@ function App() {
   useEffect(() => {
     if (!job || !project || !['queued', 'running'].includes(job.status)) return;
     const timer = window.setTimeout(() => {
-      void api<Job>(`/api/jobs/${job.job_id}`).then(next => {
+      void api<Job>(`/api/jobs/${job.job_id}`).then(async next => {
         setJob(next);
+        if (next.status === 'done' && autoEditJob.current) {
+          autoEditJob.current = false;
+          const saved = await api<{ revision: number; timeline: Timeline }>(`/api/projects/${project.project_id}/timeline`);
+          const prior = historyRef.current;
+          if (prior) {
+            const nextHistory = push(prior, saved.timeline);
+            historyRef.current = nextHistory; setHistory(nextHistory);
+          }
+          dirty.current = false;
+          setTimeline(saved.timeline); setRevision(saved.revision); setIssues([]); setSaveMessage('Saved');
+          setSelectedClipId(null); setPlayhead(0); setAutoEditError(null);
+          await runCheck(project.project_id);
+        } else if (['failed', 'cancelled'].includes(next.status)) {
+          autoEditJob.current = false;
+          if (next.status === 'failed' && next.error) setAutoEditError(next.error);
+        }
         if (next.status === 'done' && previewJob.current && next.output) {
           const filename = next.output.split(/[\\/]/).pop() ?? '';
           setPreviewRender(`/media/projects/${project.project_id}/exports/${encodeURIComponent(filename)}`);
@@ -105,7 +130,44 @@ function App() {
       setAssets(result.assets); setError('');
     } catch (e) { setError(String(e)); }
   };
-  const updateTimeline = (next: Timeline) => { dirty.current = true; setTimeline(next); };
+  const updateTimeline = (next: Timeline) => {
+    dirty.current = true;
+    const prior = historyRef.current;
+    if (prior) { const nextHistory = push(prior, next); historyRef.current = nextHistory; setHistory(nextHistory); }
+    setTimeline(next);
+  };
+  const travelHistory = (move: (value: History<Timeline>) => History<Timeline>) => {
+    const prior = historyRef.current;
+    if (!prior) return;
+    const next = move(prior);
+    if (next === prior) return;
+    historyRef.current = next; setHistory(next); dirty.current = true; setTimeline(next.present);
+  };
+  const undoEdit = () => travelHistory(undo);
+  const redoEdit = () => travelHistory(redo);
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if ((event.target as HTMLElement | null)?.matches('input,textarea,select,[contenteditable=true]')) return;
+      const mod = event.ctrlKey || event.metaKey;
+      if (mod && event.key.toLowerCase() === 'z') {
+        event.preventDefault(); event.shiftKey ? redoEdit() : undoEdit();
+      } else if (mod && event.key.toLowerCase() === 'y') { event.preventDefault(); redoEdit(); }
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  });
+  const startAutoEdit = async (request: { musicAssetId: string; mood: 'energetic' | 'calm'; durationS: number; videoAssetIds: string[] }) => {
+    if (!project || !timeline) return;
+    setAutoEditError(null);
+    autoEditJob.current = true;
+    try {
+      const result = await api<{ job_id: string }>(`/api/projects/${project.project_id}/auto-edit`, json('POST', {
+        base_revision: revision, music_asset_id: request.musicAssetId, mood: request.mood,
+        duration_s: request.durationS, video_asset_ids: request.videoAssetIds,
+      }));
+      setJob({ job_id: result.job_id, status: 'queued', progress: 0, message: 'Queued', output: null, report: null, error: null });
+    } catch (e) { autoEditJob.current = false; setAutoEditError(e instanceof Error ? e.message : String(e)); }
+  };
   const startRender = async (forPreview: boolean) => {
     if (!project || !readiness?.ok) return;
     previewJob.current = forPreview;
@@ -142,6 +204,11 @@ function App() {
             </button>)}</div>
             {!assets.length && <div className="drop-hint"><span>＋</span><strong>Your media will appear here</strong><small>Add videos, photos, and music to get started.</small><button className="quiet" onClick={() => void addMedia()}>Browse files</button></div>}
           </div>
+          <div className="timeline-toolbar"><div><button className="quiet" onClick={() => setShowAutoEdit(true)} disabled={saveMessage !== 'Saved' || !!job && ['queued', 'running'].includes(job.status)}>Auto-edit…</button>
+            <button className="quiet" onClick={undoEdit} disabled={!history || !canUndo(history)} title="Undo (Ctrl+Z)">Undo</button>
+            <button className="quiet" onClick={redoEdit} disabled={!history || !canRedo(history)} title="Redo (Ctrl+Shift+Z / Ctrl+Y)">Redo</button></div>
+            {autoEditError && <span className="error-text" role="alert">{autoEditError}</span>}
+          </div>
           <TimelineEditor timeline={timeline} assets={assets} projectId={project.project_id} selectedId={selectedClipId} onSelect={setSelectedClipId} playhead={playhead} onPlayhead={setPlayhead} onChange={updateTimeline} issues={issues} error={error.startsWith('Clip') ? error : ''} onError={setError}/>
           <div className="editor-workbench">
             <section className="panel preview-panel"><div className="section-head"><div><h2>Preview</h2><span>{previewRender ? 'Quick preview render' : selectedAsset?.file_name ?? 'Select a media item'}</span></div><span className="panel-dot"/></div>
@@ -164,6 +231,12 @@ function App() {
         {error && !error.startsWith('Clip') && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
       </section>
     </div>
+    {showAutoEdit && project && timeline && <AutoEditDialog assets={assets} hasClips={timeline.clips.length > 0}
+      active={!!job && ['queued', 'running'].includes(job.status) && autoEditJob.current}
+      progress={job?.progress ?? 0} message={job?.message ?? 'Queued'} error={autoEditError}
+      onStart={request => void startAutoEdit(request)}
+      onCancel={() => { if (job) void api(`/api/jobs/${job.job_id}/cancel`, json('POST', {})); }}
+      onClose={() => { setShowAutoEdit(false); setAutoEditError(null); }}/ >}
   </main>;
 }
 

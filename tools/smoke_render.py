@@ -18,18 +18,8 @@ from poc.ingest.normalize import normalize_asset
 from poc.project_assets import ProjectAssetLibrary
 from poc.render.editor import EditorRenderer
 from poc.render.export import get_profile
-from poc.timeline import (
-    AudioProperties,
-    EditorClip,
-    EditorSettings,
-    EditorTimeline,
-    Layer,
-    MediaAsset,
-    TimeBase,
-    Timeline,
-    Track,
-    frame_to_ms,
-)
+from poc.editor_bridge import legacy_to_editor
+from poc.timeline import EditorSettings, MediaAsset, Timeline
 
 
 MEDIA_KINDS = {
@@ -78,57 +68,16 @@ def _print_probe_table(rows: list[dict]) -> None:
 def _timeline_with_library(legacy: Timeline, library: ProjectAssetLibrary,
                            imported: dict[Path, object], base_dir: Path,
                            music_path: Path, profile: str):
-    # Project-library IDs are content-addressed, while migration IDs are URI-addressed.
-    # Build editor clips against the library IDs directly when these namespaces differ.
-    assets = []
-    for item in library.project.assets:
-        kind = "music" if Path(item.source_path).resolve() == music_path.resolve() else item.kind
-        assets.append(item.media_asset.model_copy(update={"kind": kind}))
-    by_source = {path.resolve(): item for path, item in imported.items()}
-    video_layer, music_layer = "smoke_video_layer", "smoke_music_layer"
-    video_track, music_track = "smoke_video_track", "smoke_music_track"
-    clips = []
+    source_to_asset_id = {path.resolve(): item.asset_id for path, item in imported.items()}
     for clip in legacy.clips:
         source = Path(clip.source.path)
-        if not source.is_absolute():
-            source = base_dir / source
-        project_asset = by_source[source.resolve()]
-        start_tick = frame_to_ms(clip.start_frame, legacy.settings.fps)
-        end_tick = frame_to_ms(clip.end_frame, legacy.settings.fps)
-        clips.append(EditorClip(
-            clip_id=clip.id,
-            asset_id=project_asset.asset_id,
-            track_id=video_track,
-            start_tick=start_tick,
-            duration_ticks=end_tick - start_tick,
-            source_in_ms=clip.source.in_ms,
-            source_out_ms=clip.source_out_ms(legacy.settings.fps),
-            score=clip.score,
-            rationale=clip.rationale,
-        ))
-    music_project_asset = imported[music_path.resolve()]
-    clips.append(EditorClip(
-        clip_id="smoke_music_clip",
-        asset_id=music_project_asset.asset_id,
-        track_id=music_track,
-        start_tick=0,
-        duration_ticks=legacy.duration_ms,
-        source_in_ms=legacy.music.in_ms,
-        source_out_ms=legacy.music.in_ms + legacy.duration_ms,
-        audio=AudioProperties(gain_db=legacy.music.gain_db, fade_out_ms=legacy.music.fade_out_ms),
-    ))
+        resolved = source if source.is_absolute() else base_dir / source
+        source_to_asset_id[clip.source.path] = imported[resolved.resolve()].asset_id
     export = get_profile(profile)
-    return EditorTimeline(
-        project_id=f"smoke_{profile}", timeline_id="smoke_timeline",
-        duration_ticks=legacy.duration_ms, time_base=TimeBase(ticks_per_second=1000),
+    return legacy_to_editor(
+        legacy, library=library, source_to_asset_id=source_to_asset_id,
+        music_asset_id=imported[music_path.resolve()].asset_id,
         settings=EditorSettings(fps_num=30, fps_den=1, width=export.width, height=export.height),
-        music_asset_id=music_project_asset.asset_id, music_track_id=music_track,
-        assets=assets,
-        layers=[Layer(layer_id=video_layer, name="Video", order=0),
-                Layer(layer_id=music_layer, name="Music", order=1)],
-        tracks=[Track(track_id=video_track, kind="video", layer_id=video_layer, name="Video"),
-                Track(track_id=music_track, kind="music", layer_id=music_layer, name="Music")],
-        clips=clips, provenance=legacy.provenance,
     )
 
 
