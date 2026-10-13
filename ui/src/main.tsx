@@ -1,6 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, Asset, Job, json, mediaBlobUrl, Project } from './api';
+import { api, Asset, EditorCatalogue, Job, json, Project, saveTimeline, thumbnailUrl } from './api';
+import { Inspector } from './timeline/Inspector';
+import { TimelineEditor } from './timeline/TimelineEditor';
+import { Timeline, TimelineClip } from './timeline/ops';
 import './style.css';
 
 const profiles = ['preview_540p', 'youtube_1080p', 'reels_9x16', 'square_1x1'];
@@ -9,50 +12,80 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [selected, setSelected] = useState<Asset | null>(null);
-  const [preview, setPreview] = useState('');
-  const [thumbs, setThumbs] = useState<Record<string, string>>({});
+  const [timeline, setTimeline] = useState<Timeline | null>(null);
+  const [catalogue, setCatalogue] = useState<EditorCatalogue | null>(null);
+  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [playhead, setPlayhead] = useState(0);
   const [profile, setProfile] = useState('preview_540p');
   const [job, setJob] = useState<Job | null>(null);
+  const [previewRender, setPreviewRender] = useState('');
   const [name, setName] = useState('My project');
   const [error, setError] = useState('');
+  const [saveMessage, setSaveMessage] = useState('');
+  const [revision, setRevision] = useState(1);
+  const [issues, setIssues] = useState<Array<{ code: string; message: string; clip_id?: string }>>([]);
+  const [readiness, setReadiness] = useState<{ ok: boolean; error: string | null } | null>(null);
+  const [checking, setChecking] = useState(false);
+  const dirty = useRef(false);
+  const previewJob = useRef(false);
 
   const refreshProjects = async () => setProjects((await api<{ projects: Project[] }>('/api/projects')).projects);
+  const runCheck = async (pid: string) => {
+    setChecking(true);
+    try { setReadiness(await api(`/api/projects/${pid}/check`, json('POST', {}))); }
+    catch (e) { setReadiness({ ok: false, error: e instanceof Error ? e.message : String(e) }); }
+    finally { setChecking(false); }
+  };
   const openProject = async (value: Project) => {
-    setProject(value); setSelected(null); setJob(null); setError('');
-    const result = await api<{ assets: Asset[] }>(`/api/projects/${value.project_id}/assets`);
-    setAssets(result.assets);
+    setProject(value); setSelectedAsset(null); setSelectedClipId(null); setJob(null); setError(''); setPreviewRender(''); setSaveMessage('Loading…');
+    dirty.current = false;
+    try {
+      const [assetResult, saved, catalog] = await Promise.all([
+        api<{ assets: Asset[] }>(`/api/projects/${value.project_id}/assets`),
+        api<{ revision: number; timeline: Timeline }>(`/api/projects/${value.project_id}/timeline`),
+        api<EditorCatalogue>('/api/catalogue'),
+      ]);
+      setAssets(assetResult.assets); setTimeline(saved.timeline); setRevision(saved.revision); setCatalogue(catalog);
+      setIssues([]); setSaveMessage('Saved'); setPlayhead(0);
+      await runCheck(value.project_id);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); setSaveMessage(''); }
   };
   useEffect(() => { void refreshProjects().catch(e => setError(String(e))); }, []);
+
   useEffect(() => {
-    if (!project || !selected || selected.kind === 'audio' || selected.kind === 'music') { setPreview(''); return; }
-    let live = true;
-    const url = selected.kind === 'image'
-      ? `/api/projects/${project.project_id}/assets/${selected.asset_id}/thumbnails/0`
-      : `/api/projects/${project.project_id}/assets/${selected.asset_id}/proxy`;
-    void mediaBlobUrl(url).then(blob => { if (live) setPreview(blob); else URL.revokeObjectURL(blob); })
-      .catch(e => setError(String(e)));
-    return () => { live = false; setPreview(current => { if (current) URL.revokeObjectURL(current); return ''; }); };
-  }, [project, selected]);
-  useEffect(() => {
-    if (!project) return;
-    let live = true;
-    const load = async () => {
-      const pairs = await Promise.all(assets.filter(a => a.thumbnail_count > 0).map(async asset => {
-        if (thumbs[asset.asset_id]) return [asset.asset_id, thumbs[asset.asset_id]] as const;
-        const url = `/api/projects/${project.project_id}/assets/${asset.asset_id}/thumbnails/0`;
-        return [asset.asset_id, await mediaBlobUrl(url)] as const;
-      }));
-      if (live) setThumbs(current => ({ ...current, ...Object.fromEntries(pairs) }));
-      else pairs.forEach(([, url]) => { if (!Object.values(thumbs).includes(url)) URL.revokeObjectURL(url); });
-    };
-    void load().catch(() => undefined);
-    return () => { live = false; };
-  }, [project, assets]);
+    if (!project || !timeline || !dirty.current) return;
+    setSaveMessage('Unsaved changes');
+    const pid = project.project_id;
+    const pending = timeline;
+    const timer = window.setTimeout(async () => {
+      dirty.current = false;
+      setSaveMessage('Saving…');
+      try {
+        const result = await saveTimeline(pid, revision, pending);
+        if (result.conflict) {
+          setTimeline(result.saved.timeline); setRevision(result.saved.revision); setIssues([]);
+          setSaveMessage('Timeline changed elsewhere — reloaded');
+          await runCheck(pid);
+        } else {
+          setRevision(result.revision); setIssues(result.issues); setSaveMessage('Saved');
+          await runCheck(pid);
+        }
+      } catch (e) { setSaveMessage('Save failed'); setError(e instanceof Error ? e.message : String(e)); dirty.current = true; }
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [timeline, project, revision]);
+
   useEffect(() => {
     if (!job || !project || !['queued', 'running'].includes(job.status)) return;
     const timer = window.setTimeout(() => {
-      void api<Job>(`/api/jobs/${job.job_id}`).then(setJob).catch(e => setError(String(e)));
+      void api<Job>(`/api/jobs/${job.job_id}`).then(next => {
+        setJob(next);
+        if (next.status === 'done' && previewJob.current && next.output) {
+          const filename = next.output.split(/[\\/]/).pop() ?? '';
+          setPreviewRender(`/media/projects/${project.project_id}/exports/${encodeURIComponent(filename)}`);
+        }
+      }).catch(e => setError(String(e)));
     }, 500);
     return () => window.clearTimeout(timer);
   }, [job, project]);
@@ -72,15 +105,22 @@ function App() {
       setAssets(result.assets); setError('');
     } catch (e) { setError(String(e)); }
   };
-  const startRender = async () => {
-    if (!project) return;
+  const updateTimeline = (next: Timeline) => { dirty.current = true; setTimeline(next); };
+  const startRender = async (forPreview: boolean) => {
+    if (!project || !readiness?.ok) return;
+    previewJob.current = forPreview;
+    setPreviewRender('');
     try {
-      const result = await api<{ job_id: string }>(`/api/projects/${project.project_id}/render`, json('POST', { profile }));
+      const result = await api<{ job_id: string }>(`/api/projects/${project.project_id}/render`, json('POST', { profile: forPreview ? 'preview_540p' : profile }));
       setJob({ job_id: result.job_id, status: 'queued', progress: 0, message: 'Queued', output: null, report: null, error: null });
     } catch (e) { setError(String(e)); }
   };
   const cancel = async () => { if (job) await api(`/api/jobs/${job.job_id}/cancel`, json('POST', {})); };
   const reveal = async () => { if (job?.output) await api('/api/reveal', json('POST', { path: job.output })); };
+  const selectedClip = useMemo<TimelineClip | null>(() => timeline?.clips.find(clip => clip.clip_id === selectedClipId) ?? null, [timeline, selectedClipId]);
+  const previewUrl = previewRender || (project && selectedAsset && ['video', 'image'].includes(selectedAsset.kind)
+    ? selectedAsset.kind === 'image' ? thumbnailUrl(project.project_id, selectedAsset.asset_id) : `/api/projects/${project.project_id}/assets/${selectedAsset.asset_id}/proxy`
+    : '');
 
   return <main className="app-shell">
     <header className="topbar"><div className="brand-mark">V</div><div><strong>Offline Editor</strong><small>Private workspace · This device</small></div>
@@ -92,32 +132,39 @@ function App() {
         <div className="sidebar-note"><span>◉</span><p>Files stay on this computer.<br/>No uploads or cloud services.</p></div>
       </aside>
       <section className="main-column">
-        {!project ? <div className="empty-state"><div className="empty-icon">▧</div><h1>Your edit starts here</h1><p>Create a project or open one from the list.</p><button onClick={() => void createProject()}>Create project</button></div> : <>
+        {!project || !timeline ? <div className="empty-state"><div className="empty-icon">▧</div><h1>Your edit starts here</h1><p>Create a project or open one from the list.</p><button onClick={() => void createProject()}>Create project</button></div> : <>
           <div className="page-heading"><div><p className="eyebrow">PROJECT</p><h1>{project.name}</h1></div><button className="primary" onClick={() => void addMedia()}>＋ Add media</button></div>
           <div className="media-section"><div className="section-head"><div><h2>Media bin</h2><span>{assets.length} items</span></div><button className="quiet" onClick={() => void openProject(project)}>↻</button></div>
-            <div className="media-grid">{assets.map(asset => <button key={asset.asset_id} className={`media-card ${selected?.asset_id === asset.asset_id ? 'chosen' : ''}`} onClick={() => setSelected(asset)}>
-              <div className="thumb">{thumbs[asset.asset_id] ? <img src={thumbs[asset.asset_id]} /> : <span>{asset.kind === 'audio' || asset.kind === 'music' ? '♫' : '▧'}</span>}<b>{asset.kind.toUpperCase()}</b></div>
+            <div className="media-grid">{assets.map(asset => <button key={asset.asset_id} className={`media-card ${selectedAsset?.asset_id === asset.asset_id ? 'chosen' : ''}`} draggable onDragStart={event => { event.dataTransfer.setData('application/x-editor-asset', asset.asset_id); event.dataTransfer.effectAllowed = 'copy'; }} onClick={() => { setSelectedAsset(asset); setPreviewRender(''); }}>
+              <div className="thumb">{asset.thumbnail_count > 0 ? <img src={thumbnailUrl(project.project_id, asset.asset_id)} alt=""/> : <span>♫</span>}<b>{asset.kind.toUpperCase()}</b></div>
               <strong title={asset.file_name}>{asset.file_name}</strong><small>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : asset.kind} {asset.fps ? `· ${asset.fps.toFixed(1)} fps` : ''}</small>
               <div className="badges">{asset.hdr && <em>HDR</em>}{asset.rotation ? <em>ROTATED</em> : null}{asset.has_audio && <em>AUDIO</em>}</div>
             </button>)}</div>
             {!assets.length && <div className="drop-hint"><span>＋</span><strong>Your media will appear here</strong><small>Add videos, photos, and music to get started.</small><button className="quiet" onClick={() => void addMedia()}>Browse files</button></div>}
           </div>
-          <div className="lower-grid"><section className="panel preview-panel"><div className="section-head"><div><h2>Preview</h2><span>{selected?.file_name ?? 'Select a media item'}</span></div><span className="panel-dot" /></div>
-            {preview && selected?.kind === 'video' ? <video key={preview} src={preview} controls /> : preview ? <img className="still-preview" src={preview} /> : <div className="preview-empty"><span>▶</span><p>Select a video to preview</p></div>}
-          </section>
-          <section className="panel export-panel"><div className="section-head"><div><h2>Export</h2><span>Render your current timeline</span></div><span className="export-symbol">⇧</span></div>
-            <label htmlFor="profile">Export profile</label><select id="profile" value={profile} onChange={e => setProfile(e.target.value)}>{profiles.map(p => <option key={p} value={p}>{p.replaceAll('_', ' ')}</option>)}</select>
-            {!job || job.status === 'done' || job.status === 'failed' || job.status === 'cancelled' ? <button className="primary render-button" onClick={() => void startRender()} disabled={!assets.length}>Render video</button> : <>
-              <div className="job-line"><span>{job.message}</span><strong>{Math.round(job.progress * 100)}%</strong></div><div className="progress"><i style={{ width: `${job.progress * 100}%` }} /></div><button className="quiet cancel" onClick={() => void cancel()}>Cancel render</button>
-            </>}
-            {job?.status === 'done' && <div className="job-result"><strong className={job.report?.ok ? 'good' : 'bad'}>{job.report?.ok ? '✓ Render verified' : '⚠ Verification found issues'}</strong>{job.report?.problems.map(problem => <small key={problem}>{problem}</small>)}<button className="quiet" onClick={() => void reveal()}>Show in folder ↗</button></div>}
-            {job?.error && <p className="error-text">{job.error}</p>}
-          </section></div>
+          <TimelineEditor timeline={timeline} assets={assets} projectId={project.project_id} selectedId={selectedClipId} onSelect={setSelectedClipId} playhead={playhead} onPlayhead={setPlayhead} onChange={updateTimeline} issues={issues} error={error.startsWith('Clip') ? error : ''} onError={setError}/>
+          <div className="editor-workbench">
+            <section className="panel preview-panel"><div className="section-head"><div><h2>Preview</h2><span>{previewRender ? 'Quick preview render' : selectedAsset?.file_name ?? 'Select a media item'}</span></div><span className="panel-dot"/></div>
+              {previewUrl && selectedAsset?.kind !== 'image' ? <video key={previewUrl} src={previewUrl} controls autoPlay={!!previewRender}/> : previewUrl ? <img className="still-preview" src={previewUrl} alt="Selected still"/> : <div className="preview-empty"><span>▶</span><p>Select a video to preview</p></div>}
+              <button className="quiet preview-render" disabled={!readiness?.ok || checking || job?.status === 'running'} onClick={() => void startRender(true)}>Quick preview render</button>
+            </section>
+            <Inspector timeline={timeline} clip={selectedClip} catalogue={catalogue} onChange={updateTimeline}/>
+            <section className="panel export-panel"><div className="section-head"><div><h2>Export</h2><span>{checking ? 'Checking timeline…' : 'Ready to export'}</span></div><span className={`readiness-dot ${readiness?.ok ? 'ready' : ''}`}/></div>
+              {!readiness?.ok && readiness?.error && <p className="readiness-error">{readiness.error}</p>}
+              <p className={`save-state ${saveMessage === 'Saved' ? 'saved' : ''}`}>{saveMessage}</p>
+              <label htmlFor="profile">Export profile</label><select id="profile" value={profile} onChange={e => setProfile(e.target.value)}>{profiles.map(p => <option key={p} value={p}>{p.replaceAll('_', ' ')}</option>)}</select>
+              {!job || ['done', 'failed', 'cancelled'].includes(job.status) ? <button className="primary render-button" onClick={() => void startRender(false)} disabled={!readiness?.ok || checking}>{readiness?.ok ? 'Render video' : 'Resolve timeline issues'}</button> : <>
+                <div className="job-line"><span>{job.message}</span><strong>{Math.round(job.progress * 100)}%</strong></div><div className="progress"><i style={{ width: `${job.progress * 100}%` }}/></div><button className="quiet cancel" onClick={() => void cancel()}>Cancel render</button>
+              </>}
+              {job?.status === 'done' && <div className="job-result"><strong className={job.report?.ok ? 'good' : 'bad'}>{job.report?.ok ? '✓ Render verified' : '⚠ Verification found issues'}</strong>{job.report?.problems.map(problem => <small key={problem}>{problem}</small>)}<button className="quiet" onClick={() => void reveal()}>Show in folder ↗</button></div>}
+              {job?.error && <p className="error-text">{job.error}</p>}
+            </section>
+          </div>
         </>}
-        {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
+        {error && !error.startsWith('Clip') && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
       </section>
     </div>
   </main>;
 }
 
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);
+createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);

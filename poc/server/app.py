@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,10 @@ from poc.ingest.proxy import make_proxy, make_thumbnails
 from poc.project_assets import AssetImportError, ProjectAssetLibrary
 from poc.render.editor import EditorRenderer, RenderCancelled
 from poc.render.export import EXPORT_PROFILES, get_profile
-from poc.timeline import EditorSettings, EditorTimeline, Layer, MediaAsset, TimeBase, Track
+from poc.timeline import (
+    EditorSettings, EditorTimeline, Layer, MediaAsset, TimeBase, Track,
+    serialize_effect_catalogue, serialize_transition_catalogue,
+)
 from poc.timeline.validate import validate_editor_timeline
 
 
@@ -45,31 +49,31 @@ def _library(root: Path) -> ProjectAssetLibrary:
     return ProjectAssetLibrary.load(root)
 
 
-def _asset_info(item, cache_dir: Path) -> dict[str, Any]:
-    media = item.media_asset
-    try:
-        normalized = normalize_asset(media)
-        width, height = normalized.width, normalized.height
-        fps = normalized.fps
-        has_audio = normalized.has_audio
-        rotation = normalized.rotation_degrees
-        hdr = normalized.is_hdr
-    except Exception:
-        width = item.metadata.get("width")
-        height = item.metadata.get("height")
-        fps = item.metadata.get("fps")
-        has_audio = bool(item.metadata.get("has_audio", False))
-        rotation = 0
-        hdr = False
-    if width and height:
-        thumbnail_count = 10
-    else:
-        thumbnail_count = 0
+def _asset_info(item, probe_cache: dict[str, dict[str, Any]], probe_lock: threading.Lock) -> dict[str, Any]:
+    cache_key = f"{item.kind}:{item.content_hash}"
+    with probe_lock:
+        cached = probe_cache.get(cache_key)
+        if cached is None:
+            media = item.media_asset
+            try:
+                normalized = normalize_asset(media)
+                cached = {
+                    "width": normalized.width, "height": normalized.height,
+                    "fps": normalized.fps, "has_audio": normalized.has_audio,
+                    "rotation": normalized.rotation_degrees, "hdr": normalized.is_hdr,
+                }
+            except Exception:
+                cached = {
+                    "width": item.metadata.get("width"), "height": item.metadata.get("height"),
+                    "fps": item.metadata.get("fps"),
+                    "has_audio": bool(item.metadata.get("has_audio", False)),
+                    "rotation": 0, "hdr": False,
+                }
+            probe_cache[cache_key] = cached
     return {
         "asset_id": item.asset_id, "kind": item.kind,
         "file_name": Path(item.source_path).name, "duration_ms": item.duration_ms,
-        "width": width, "height": height, "fps": fps, "has_audio": has_audio,
-        "rotation": rotation, "hdr": hdr, "thumbnail_count": thumbnail_count,
+        **cached, "thumbnail_count": 10 if cached.get("width") and cached.get("height") else 0,
     }
 
 
@@ -78,11 +82,20 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
     data_dir = Path(data_dir).resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
     ui_dist = Path(__file__).resolve().parents[2] / "ui" / "dist"
-    app = FastAPI(title="Offline Video Editor", docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        try:
+            yield
+        finally:
+            application.state.executor.shutdown(wait=True, cancel_futures=True)
+
+    app = FastAPI(title="Offline Video Editor", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.data_dir = data_dir
     app.state.jobs: dict[str, dict[str, Any]] = {}
     app.state.job_lock = threading.RLock()
     app.state.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="editor-render")
+    app.state.asset_probe_cache = {}
+    app.state.asset_probe_lock = threading.Lock()
 
     @app.middleware("http")
     async def local_security(request: Request, call_next):
@@ -94,9 +107,17 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             dev_mode and request.method == "OPTIONS"
             and origin == "http://localhost:5173"
         )
-        if (request.url.path.startswith("/api/") and not dev_preflight
-                and request.headers.get("x-editor-token") != token):
-            return Response("Unauthorized", status_code=401)
+        if request.url.path.startswith("/api/") and not dev_preflight:
+            header_ok = secrets.compare_digest(request.headers.get("x-editor-token", ""), token)
+            cookie_media = (
+                request.method == "GET"
+                and re.fullmatch(r"/api/projects/p_[0-9a-f]{8}/assets/[^/]+/(?:proxy|thumbnails/\d+)", request.url.path)
+            )
+            cookie_ok = cookie_media and secrets.compare_digest(
+                request.cookies.get("editor_session", ""), token
+            )
+            if not (header_ok or cookie_ok):
+                return Response("Unauthorized", status_code=401)
         if dev_preflight:
             return Response(status_code=204, headers={
                 "Access-Control-Allow-Origin": origin,
@@ -180,14 +201,12 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             library.project = original
             library.save()
             raise HTTPException(422, str(exc)) from exc
-        cache = data_dir / "cache"
-        return {"assets": [_asset_info(item, cache) for item in library.project.assets]}
+        return {"assets": [_asset_info(item, app.state.asset_probe_cache, app.state.asset_probe_lock) for item in library.project.assets]}
 
     @app.get("/api/projects/{pid}/assets")
     def list_assets(pid: str):
         library = _library(_project_root(data_dir, pid))
-        cache = data_dir / "cache"
-        return {"assets": [_asset_info(item, cache) for item in library.project.assets]}
+        return {"assets": [_asset_info(item, app.state.asset_probe_cache, app.state.asset_probe_lock) for item in library.project.assets]}
 
     @app.get("/api/projects/{pid}/assets/{aid}/proxy")
     def asset_proxy(pid: str, aid: str, range_header: str | None = Header(default=None, alias="Range")):
@@ -258,7 +277,6 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             raise HTTPException(422, "timeline must be an object")
         try:
             library = _library(root)
-            project_assets = {asset.asset_id: asset for asset in library.project.assets}
             raw = dict(raw)
             raw["project_id"] = pid
             raw["revision"] = current.revision + 1
@@ -266,11 +284,6 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             # Library owns media metadata and paths; user text assets remain timeline-only.
             given_assets = raw.get("assets", [])
             given_text = [item for item in given_assets if isinstance(item, dict) and item.get("kind") == "text"]
-            ids = {item.get("asset_id") for item in given_assets if isinstance(item, dict)}
-            for clip in raw.get("clips", []):
-                asset_id = clip.get("asset_id") if isinstance(clip, dict) else None
-                if asset_id in project_assets and asset_id not in ids:
-                    given_assets.append(project_assets[asset_id].media_asset.model_dump(mode="json"))
             raw["assets"] = [asset.media_asset.model_dump(mode="json") for asset in library.project.assets]
             raw["assets"].extend(given_text)
             timeline = EditorTimeline.model_validate(raw)
@@ -280,7 +293,33 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         timeline.save(root / "timeline.json")
         library.project = library.project.model_copy(update={"timeline": timeline})
         library.save()
-        return {"revision": timeline.revision, "violations": [item.code for item in violations]}
+        return {
+            "revision": timeline.revision,
+            "violations": [item.code for item in violations],
+            "issues": [
+                {"code": item.code, "message": item.detail,
+                 **({"clip_id": item.clip_id} if item.clip_id else {})}
+                for item in violations
+            ],
+        }
+
+    @app.get("/api/catalogue")
+    def catalogue():
+        return {
+            "transitions": json.loads(serialize_transition_catalogue()),
+            "effects": json.loads(serialize_effect_catalogue()),
+        }
+
+    @app.post("/api/projects/{pid}/check")
+    def check_timeline(pid: str):
+        root = _project_root(data_dir, pid)
+        timeline = EditorTimeline.load(root / "timeline.json")
+        library = _library(root)
+        try:
+            EditorRenderer().compile(timeline, library)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "error": None}
 
     def start_job(pid: str, profile: str) -> str:
         job_id = uuid.uuid4().hex[:12]
@@ -317,19 +356,23 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
                                                   cancel=record["cancel"].is_set)
                 if record["cancel"].is_set():
                     output.unlink(missing_ok=True)
-                    record.update(status="cancelled", message="Cancelled", output=None)
+                    with app.state.job_lock:
+                        record.update(status="cancelled", message="Cancelled", output=None)
                     return
-                record.update(status="done", progress=1.0, message="Render complete",
-                               output=str(result.out_path), report={"ok": result.report.ok,
-                               "problems": result.report.problems, "measured": result.report.measured})
+                with app.state.job_lock:
+                    record.update(status="done", progress=1.0, message="Render complete",
+                                  output=str(result.out_path), report={"ok": result.report.ok,
+                                  "problems": result.report.problems, "measured": result.report.measured})
             except RenderCancelled:
                 if partial_output:
                     partial_output.unlink(missing_ok=True)
-                record.update(status="cancelled", message="Cancelled", output=None)
+                with app.state.job_lock:
+                    record.update(status="cancelled", message="Cancelled", output=None)
             except Exception as exc:
                 if partial_output:
                     partial_output.unlink(missing_ok=True)
-                record.update(status="failed", message="Render failed", error=f"{type(exc).__name__}: {exc}")
+                with app.state.job_lock:
+                    record.update(status="failed", message="Render failed", error=f"{type(exc).__name__}: {exc}")
 
         app.state.executor.submit(work)
         return job_id
@@ -394,6 +437,50 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             subprocess.Popen(["explorer.exe", "/select,", str(target)])
         return {"ok": True}
 
+    @app.get("/media/projects/{pid}/exports/{filename}")
+    def preview_export(pid: str, filename: str, request: Request,
+                       range_header: str | None = Header(default=None, alias="Range")):
+        if not secrets.compare_digest(request.cookies.get("editor_session", ""), token):
+            raise HTTPException(401, "unauthorized")
+        root = _project_root(data_dir, pid)
+        if Path(filename).name != filename or not filename.lower().endswith(".mp4"):
+            raise HTTPException(404, "export not found")
+        exports = (root / "exports").resolve()
+        target = (exports / filename).resolve()
+        try:
+            target.relative_to(exports)
+        except ValueError as exc:
+            raise HTTPException(404, "export not found") from exc
+        if not target.is_file():
+            raise HTTPException(404, "export not found")
+        size = target.stat().st_size
+        headers = {"Accept-Ranges": "bytes", "Content-Type": "video/mp4"}
+        if range_header:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+            if not match or (not match.group(1) and not match.group(2)):
+                return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+            if match.group(1):
+                start = int(match.group(1)); end = int(match.group(2) or size - 1)
+            else:
+                suffix = int(match.group(2)); start = max(0, size - suffix); end = size - 1
+            if start >= size or end < start:
+                return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+            end = min(end, size - 1)
+            length = end - start + 1
+            headers.update({"Content-Range": f"bytes {start}-{end}/{size}", "Content-Length": str(length)})
+            def blocks():
+                with target.open("rb") as stream:
+                    stream.seek(start)
+                    remaining = length
+                    while remaining:
+                        chunk = stream.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                        yield chunk
+            return StreamingResponse(blocks(), status_code=206, headers=headers, media_type="video/mp4")
+        return FileResponse(target, media_type="video/mp4", headers=headers)
+
     @app.get("/")
     def index():
         index_path = ui_dist / "index.html"
@@ -405,7 +492,12 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             content = content.replace("</head>", tag + "</head>", 1)
         else:
             content = tag + content
-        return HTMLResponse(content)
+        response = HTMLResponse(content, headers={
+            "Content-Security-Policy": "default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+            "Cache-Control": "no-store",
+        })
+        response.set_cookie("editor_session", token, httponly=True, samesite="strict", path="/")
+        return response
 
     if ui_dist.is_dir():
         app.mount("/static", StaticFiles(directory=ui_dist, check_dir=True), name="ui-static")
