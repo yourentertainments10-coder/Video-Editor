@@ -3,35 +3,20 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 from pathlib import Path
+from collections.abc import Callable, Sequence
 
 import av
 
 from poc.ingest.normalize import FFMPEG_EXE, FFMPEG_NETWORK_SAFE
 from poc.render.transitions import Join, Segment, _validate
+from poc.render._process import run_ffmpeg_atomic
 
 
 def _seconds(value: float) -> str:
     return f"{value:.12g}"
-
-
-def _run_atomic(cmd: list[str], out_path: Path, *, label: str) -> Path:
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    partial = out_path.with_name(f"{out_path.stem}.{os.getpid()}.partial{out_path.suffix}")
-    cmd[-1] = str(partial)
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode:
-            raise RuntimeError(f"FFmpeg {label} failed: {result.stderr}")
-        os.replace(partial, out_path)
-    except BaseException:
-        partial.unlink(missing_ok=True)
-        raise
-    return out_path
 
 
 def _probe_audio(path: Path) -> bool:
@@ -51,6 +36,8 @@ def render_audio_track(
     fps: int = 30,
     sample_rate: int = 48000,
     cut_fade_ms: int = 10,
+    segment_audio_options: Sequence[dict] | None = None,
+    cancel: Callable[[], bool] | None = None,
 ) -> Path:
     """Render timeline audio with sample-accurate length and video-matched joins."""
     if sample_rate != 48000:
@@ -58,13 +45,23 @@ def render_audio_track(
     if cut_fade_ms < 0:
         raise ValueError("cut_fade_ms must be nonnegative")
     media, base_frames, join_frames = _validate(segments, joins, 2, 2, fps)
+    if segment_audio_options is not None and len(segment_audio_options) != len(segments):
+        raise ValueError("segment_audio_options must match segments")
+    segment_audio_options = segment_audio_options or [{} for _ in segments]
     input_has_audio = [_probe_audio(Path(segment.path)) for segment in segments]
     cmd = [FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:]]
     for index, segment in enumerate(segments):
-        cmd.extend(["-i", str(segment.path)])
+        left_frames = join_frames[index - 1] // 2 if index > 0 else 0
+        right_frames = join_frames[index] // 2 if index < len(joins) else 0
+        start_ms = segment.src_in_ms - left_frames * 1000 / fps
+        clip_frames = left_frames + base_frames[index] + right_frames
+        cmd.extend([
+            "-ss", _seconds(start_ms / 1000), "-t", _seconds(clip_frames / fps),
+            "-i", str(segment.path),
+        ])
         if not input_has_audio[index]:
             cmd.extend([
-                "-f", "lavfi", "-t", _seconds(media[index][1].duration_ms / 1000),
+                "-f", "lavfi", "-t", _seconds(clip_frames / fps),
                 "-i", "anullsrc=r=48000:cl=stereo",
             ])
 
@@ -79,14 +76,32 @@ def render_audio_track(
     for i, (segment, (_, normalized)) in enumerate(zip(segments, media)):
         left_frames = join_frames[i - 1] // 2 if i > 0 else 0
         right_frames = join_frames[i] // 2 if i < len(joins) else 0
-        start_ms = segment.src_in_ms - left_frames * 1000 / fps
         clip_frames = left_frames + base_frames[i] + right_frames
         label = f"a{i}"
         filters = [
-            f"atrim=start={_seconds(start_ms / 1000)}:duration={_seconds(clip_frames / fps)}",
+            f"atrim=start=0:duration={_seconds(clip_frames / fps)}",
             "asetpts=PTS-STARTPTS", f"aresample={sample_rate}",
             "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo",
         ]
+        options = segment_audio_options[i]
+        if options.get("muted"):
+            filters.append("volume=0")
+        else:
+            gain_db = float(options.get("gain_db", 0.0))
+            if gain_db:
+                filters.append(f"volume={_seconds(gain_db)}dB")
+            pan = float(options.get("pan", 0.0))
+            if pan < 0:
+                filters.append(f"pan=stereo|c0=c0|c1={_seconds(1+pan)}*c1")
+            elif pan > 0:
+                filters.append(f"pan=stereo|c0={_seconds(1-pan)}*c0|c1=c1")
+            fade_in = int(options.get("fade_in_ms", 0)) / 1000
+            fade_out = int(options.get("fade_out_ms", 0)) / 1000
+            if fade_in:
+                filters.append(f"afade=t=in:st={_seconds(left_frames/fps)}:d={_seconds(fade_in)}")
+            if fade_out:
+                fade_start = max(0, (left_frames + base_frames[i]) / fps - fade_out)
+                filters.append(f"afade=t=out:st={_seconds(fade_start)}:d={_seconds(fade_out)}")
         if i > 0 and joins[i - 1].kind == "cut" and cut_fade_ms:
             filters.append(f"afade=t=in:st=0:d={_seconds(cut_fade_ms / 1000)}")
         if i < len(joins) and joins[i].kind == "cut" and cut_fade_ms:
@@ -125,7 +140,7 @@ def render_audio_track(
         "-filter_complex", ";".join(graph), "-map", "[outa]",
         *_wav_output_args(), str(Path(out_path)),
     ])
-    return _run_atomic(cmd, Path(out_path), label="audio track render")
+    return run_ffmpeg_atomic(cmd, Path(out_path), cancel=cancel, label="audio track render")
 
 
 def mix_with_music(
@@ -138,6 +153,7 @@ def mix_with_music(
     duck_db: float = -10.0,
     fade_in_ms: int = 0,
     fade_out_ms: int = 0,
+    cancel: Callable[[], bool] | None = None,
 ) -> Path:
     if min(music_in_ms, fade_in_ms, fade_out_ms) < 0:
         raise ValueError("trim and fade durations must be nonnegative")
@@ -170,7 +186,7 @@ def mix_with_music(
     filters.append(f"[mix0]{','.join(fades) if fades else 'anull'},atrim=duration={duration}[outa]")
     cmd = [FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:], "-i", str(track_wav), "-i", str(music_path),
            "-filter_complex", ";".join(filters), "-map", "[outa]", *_wav_output_args(), str(Path(out_path))]
-    return _run_atomic(cmd, Path(out_path), label="music mix")
+    return run_ffmpeg_atomic(cmd, Path(out_path), cancel=cancel, label="music mix")
 
 
 def loudness_normalize(
@@ -179,11 +195,13 @@ def loudness_normalize(
     *,
     target_lufs: float = -14.0,
     true_peak_db: float = -1.0,
+    cancel: Callable[[], bool] | None = None,
 ) -> Path:
     common = [FFMPEG_EXE, "-hide_banner", "-nostats", *FFMPEG_NETWORK_SAFE[1:], "-i", str(in_path)]
-    pass1 = subprocess.run(
+    from poc.render._process import run_process
+    pass1 = run_process(
         [*common, "-af", f"loudnorm=I={target_lufs}:TP={true_peak_db}:LRA=11:print_format=json",
-         "-f", "null", "-"], capture_output=True, text=True,
+         "-f", "null", "-"], cancel=cancel,
     )
     if pass1.returncode:
         raise RuntimeError(f"FFmpeg loudness measurement failed: {pass1.stderr}")
@@ -199,4 +217,4 @@ def loudness_normalize(
     )
     cmd = [FFMPEG_EXE, "-y", "-hide_banner", *FFMPEG_NETWORK_SAFE[1:], "-i", str(in_path),
            "-af", filt, *_wav_output_args(), str(Path(out_path))]
-    return _run_atomic(cmd, Path(out_path), label="loudness normalization")
+    return run_ffmpeg_atomic(cmd, Path(out_path), cancel=cancel, label="loudness normalization")

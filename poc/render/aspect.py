@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import math
-import os
-import subprocess
 from pathlib import Path
+from collections.abc import Callable
 
 from poc.ingest.normalize import (
     FFMPEG_EXE,
@@ -15,6 +14,7 @@ from poc.ingest.normalize import (
     normalize_asset,
 )
 from poc.timeline import MediaAsset
+from poc.render._process import run_ffmpeg_atomic
 
 
 def _validate_fit_args(src_w: int, src_h: int, width: int, height: int,
@@ -91,6 +91,7 @@ def fit_to_frame_to_file(
     mode: str = "cover",
     focus: tuple[float, float] = (0.5, 0.5),
     fps: int = 30,
+    cancel: Callable[[], bool] | None = None,
 ) -> Path:
     """Encode a fitted video with optional blurred bands or subject framing."""
     if asset.uri is None:
@@ -112,10 +113,6 @@ def fit_to_frame_to_file(
         raise ValueError("Media asset duration must be known")
 
     out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    partial_path = out_path.with_name(
-        f"{out_path.stem}.{os.getpid()}.partial{out_path.suffix}"
-    )
     cmd = [FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:], *input_args]
     cmd.extend([
         "-filter_complex", graph, "-map", "[outv]", "-map", "0:a:0?",
@@ -127,16 +124,9 @@ def fit_to_frame_to_file(
     ])
     if normalized.has_audio:
         cmd.extend(["-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"])
-    cmd.extend(["-movflags", "+faststart", str(partial_path)])
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"FFmpeg aspect fitting failed: {result.stderr}")
-        os.replace(partial_path, out_path)
-    except BaseException:
-        partial_path.unlink(missing_ok=True)
-        raise
-    return out_path
+    cmd.extend(["-fflags", "+bitexact", "-flags:v", "+bitexact", "-map_metadata", "-1",
+                "-movflags", "+faststart", str(out_path)])
+    return run_ffmpeg_atomic(cmd, out_path, cancel=cancel, label="aspect fitting")
 
 
 def safe_area_warnings(

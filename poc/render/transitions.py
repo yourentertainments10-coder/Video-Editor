@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 
 from poc.ingest.normalize import (
     FFMPEG_EXE,
@@ -15,6 +15,7 @@ from poc.ingest.normalize import (
 )
 from poc.render.aspect import build_fit_filter
 from poc.timeline import MediaAsset
+from poc.render._process import run_ffmpeg_atomic
 
 
 _KINDS = {"cut", "crossfade", "fade_black", "wipe_left", "slide_left"}
@@ -101,7 +102,8 @@ def _validate(segments, joins, width: int, height: int, fps: int):
     return media, base_frames, join_frames
 
 
-def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int) -> str:
+def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int,
+                         input_seeking: bool = False) -> str:
     """Create an FFmpeg filter graph for frame-centered joins."""
     media, base_frames, join_frames = _validate(segments, joins, width, height, fps)
     graph = []
@@ -111,14 +113,20 @@ def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int) 
         clip_frames = left_h + base_frames[index] + right_h
         source_start_ms = segment.src_in_ms - left_h * 1000 / fps
         source_end_ms = segment.src_out_ms + right_h * 1000 / fps
+        if input_seeking:
+            trim_start = 0
+            trim_end = (source_end_ms - source_start_ms) / 1000
+        else:
+            trim_start = source_start_ms / 1000
+            trim_end = source_end_ms / 1000
         norm = build_normalize_filter(normalized)
         fit = build_fit_filter(
             normalized.width, normalized.height, width, height, "cover", (0.5, 0.5)
         )
         fit = fit.replace("[0:v]", f"[norm{index}]", 1).replace("[outv]", f"[fit{index}]")
         graph.append(
-            f"[{index}:v]trim=start={_seconds(source_start_ms / 1000)}:"
-            f"end={_seconds(source_end_ms / 1000)},setpts=PTS-STARTPTS,{norm}"
+            f"[{index}:v]trim=start={_seconds(trim_start)}:"
+            f"end={_seconds(trim_end)},setpts=PTS-STARTPTS,{norm}"
             f"[norm{index}];{fit};[fit{index}]fps={fps},format=yuv420p,"
             f"setsar=1,settb=1/{fps},tpad=stop_mode=clone:stop_duration=1,"
             f"trim=end_frame={clip_frames}[v{index}]"
@@ -183,16 +191,26 @@ def render_sequence_to_file(
     crf: int = 23,
     preset: str = "medium",
     audio_bitrate: str = "192k",
+    input_seeking: bool = False,
+    cancel: Callable[[], bool] | None = None,
 ) -> Path:
     """Render a deterministic silent H.264 sequence with atomic replacement."""
-    graph = build_sequence_graph(segments, joins, width=width, height=height, fps=fps)
-    _, base_frames, _ = _validate(segments, joins, width, height, fps)
+    graph = build_sequence_graph(segments, joins, width=width, height=height, fps=fps,
+                                 input_seeking=input_seeking)
+    media, base_frames, join_frames = _validate(segments, joins, width, height, fps)
     total_frames = sum(base_frames)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     partial = out_path.with_name(f"{out_path.stem}.{os.getpid()}.partial{out_path.suffix}")
-    cmd = [FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:]]
-    for segment in segments:
+    cmd = [FFMPEG_EXE, "-y", "-fflags", "+bitexact", *FFMPEG_NETWORK_SAFE[1:]]
+    for index, segment in enumerate(segments):
+        if input_seeking:
+            left_h = join_frames[index - 1] // 2 if index > 0 else 0
+            right_h = join_frames[index] // 2 if index < len(joins) else 0
+            start_ms = segment.src_in_ms - left_h * 1000 / fps
+            end_ms = segment.src_out_ms + right_h * 1000 / fps
+            cmd.extend(["-ss", _seconds(start_ms / 1000),
+                        "-t", _seconds((end_ms - start_ms) / 1000)])
         cmd.extend(["-i", str(segment.path)])
     if audio_path is not None:
         cmd.extend(["-i", str(audio_path)])
@@ -204,16 +222,12 @@ def render_sequence_to_file(
         "-filter_complex", graph, "-map", "[outv]", *audio_args,
         "-frames:v", str(total_frames), "-r", str(fps),
         "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+        "-flags:v", "+bitexact", "-map_metadata", "-1",
         "-colorspace", "bt709", "-color_primaries", "bt709",
         "-color_trc", "bt709", "-color_range", "tv",
-        "-movflags", "+faststart", str(partial),
+        "-movflags", "+faststart",
     ])
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode:
-            raise RuntimeError(f"FFmpeg transition render failed: {result.stderr}")
-        os.replace(partial, out_path)
-    except BaseException:
-        partial.unlink(missing_ok=True)
-        raise
-    return out_path
+    if audio_path is not None:
+        cmd.extend(["-flags:a", "+bitexact"])
+    cmd.append(str(partial))
+    return run_ffmpeg_atomic(cmd, out_path, cancel=cancel, label="transition render")

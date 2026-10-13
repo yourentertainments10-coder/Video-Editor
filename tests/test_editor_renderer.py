@@ -15,6 +15,7 @@ from poc.timeline import (
     AudioProperties,
     Beat,
     Clip,
+    EditorClip,
     EditorSettings,
     EditorTimeline,
     EffectRef,
@@ -43,7 +44,7 @@ FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 def _video(path: Path, *, duration: float = 2.0, color: str = "red") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi",
+        [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi", "-i",
          f"color=c={color}:s=64x48:r=10:d={duration}", "-an", "-c:v", "libx264",
          "-pix_fmt", "yuv420p", str(path)],
         check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -54,7 +55,7 @@ def _video(path: Path, *, duration: float = 2.0, color: str = "red") -> Path:
 def _audio(path: Path, *, duration: float = 3.0, frequency: int = 440) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi",
+        [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi", "-i",
          f"sine=frequency={frequency}:duration={duration}", "-c:a", "pcm_s16le", str(path)],
         check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
@@ -115,7 +116,6 @@ def _visual_clip(clip_id: str, asset: MediaAsset, track_id: str, start: int, dur
 # We mark them as xfail because the module is not yet implemented (P2.6).
 # The import is done inside the test so that collection does not fail.
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_one_video_clip_renders_as_editor_timeline(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -135,7 +135,6 @@ def test_one_video_clip_renders_as_editor_timeline(tmp_path):
     assert result.video_clip_order == ("clip-one",)
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_multiple_adjacent_video_clips_keep_timeline_order(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -159,7 +158,6 @@ def test_multiple_adjacent_video_clips_keep_timeline_order(tmp_path):
     assert probe(result.out_path, FFMPEG).duration_ms == pytest.approx(2000, abs=100)
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_render_plan_preserves_exact_source_trim_ranges(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -177,7 +175,6 @@ def test_render_plan_preserves_exact_source_trim_ranges(tmp_path):
     assert segment.duration_frames == 8
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_rendered_duration_matches_editor_timeline_duration(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -194,7 +191,6 @@ def test_rendered_duration_matches_editor_timeline_duration(tmp_path):
     assert probe(result.out_path, FFMPEG).duration_ms == pytest.approx(2000, abs=100)
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_render_plan_order_is_stable_for_identical_timeline(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -215,7 +211,6 @@ def test_render_plan_order_is_stable_for_identical_timeline(tmp_path):
     assert plan_a.video_clip_order == ("earlier", "later")
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_audio_and_music_tracks_mix_with_video(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -243,7 +238,6 @@ def test_audio_and_music_tracks_mix_with_video(tmp_path):
     assert result.audio_clip_count == 2
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_image_clip_renders_when_supported_by_opencv_and_ffmpeg(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -262,7 +256,6 @@ def test_image_clip_renders_when_supported_by_opencv_and_ffmpeg(tmp_path):
     assert result.video_clip_order == ("still",)
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_visual_overlap_is_rejected_as_unsupported_mixed_media_layout(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -281,7 +274,6 @@ def test_visual_overlap_is_rejected_as_unsupported_mixed_media_layout(tmp_path):
         render_editor_timeline(timeline, library, tmp_path / "overlap.mp4")
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_non_renderable_effect_is_rejected_clearly(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -299,7 +291,6 @@ def test_non_renderable_effect_is_rejected_clearly(tmp_path):
         render_editor_timeline(timeline, library, tmp_path / "effect.mp4")
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_non_renderable_transition_is_rejected_without_mutating_source_ranges(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -311,18 +302,17 @@ def test_non_renderable_transition_is_rejected_without_mutating_source_ranges(tm
     library, assets = _project(tmp_path, first, second)
     a, b = assets[first.name], assets[second.name]
     incoming = _visual_clip("second", b, "video", 1000, 1000, 200, 1200).model_copy(
-        update={"transition": TransitionRef(transition_id="fade", duration_ticks=100)}
+        update={"transition": TransitionRef(transition_id="wipe_right", duration_ticks=100)}
     )
     timeline = _timeline([a, b], [
         _visual_clip("first", a, "video", 0, 1000, 0, 1000), incoming,
     ], 2000)
     source_range = (incoming.source_in_ms, incoming.source_out_ms)
-    with pytest.raises(EditorRenderError, match="transition.*fade.*not renderable"):
+    with pytest.raises(EditorRenderError, match="transition.*wipe_right.*not renderable"):
         render_editor_timeline(timeline, library, tmp_path / "transition.mp4")
     assert (incoming.source_in_ms, incoming.source_out_ms) == source_range
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_transition_on_first_clip_fails_boundary_validation(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -340,7 +330,6 @@ def test_transition_on_first_clip_fails_boundary_validation(tmp_path):
         render_editor_timeline(timeline, library, tmp_path / "bad-boundary.mp4")
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_invalid_timeline_is_rejected_before_render(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -355,7 +344,6 @@ def test_invalid_timeline_is_rejected_before_render(tmp_path):
         render_editor_timeline(timeline, library, tmp_path / "invalid.mp4")
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_missing_asset_reference_is_rejected(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -369,7 +357,6 @@ def test_missing_asset_reference_is_rejected(tmp_path):
         render_editor_timeline(timeline, library, tmp_path / "missing.mp4")
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_text_layout_is_rejected_until_a_graphics_renderer_exists(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
@@ -390,7 +377,6 @@ def test_legacy_renderer_path_remains_separate():
     assert len(legacy.clips) == 5
 
 
-@pytest.mark.xfail(reason="P2.6 not implemented", strict=True)
 def test_repeated_render_has_deterministic_plan_and_decoded_frames(tmp_path):
     from poc.execute.editor_render import (
         EditorRenderError,
