@@ -15,6 +15,7 @@ export type Timeline = {
   duration_ticks: number; time_base: { ticks_per_second: number };
   settings: { fps_num: number; fps_den: number; width: number; height: number };
   assets: TimelineAsset[]; clips: TimelineClip[]; [key: string]: unknown;
+  markers: Array<{ marker_id: string; kind: string; position_tick: number; value?: number | null; label?: string | null }>;
 };
 
 export class OpError extends Error {
