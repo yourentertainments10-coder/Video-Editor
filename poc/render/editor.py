@@ -20,6 +20,7 @@ from poc.render._process import run_ffmpeg_atomic, run_process
 from poc.render.aspect import fit_to_frame_to_file
 from poc.render.audio import loudness_normalize, render_audio_track
 from poc.render.export import VerifyReport, _measure_input_i, verify_render
+from poc.render.text import TextOverlay, burn_text_to_file
 from poc.render.transitions import Join, Segment, render_sequence_to_file
 from poc.timeline import (
     AudioProperties,
@@ -81,6 +82,7 @@ class EditorRenderPlan:
     duration_ms: int
     video_segments: tuple[VideoSegment, ...]
     audio_placements: tuple[AudioPlacement, ...]
+    text_overlays: tuple[TextOverlay, ...]
     video_clip_order: tuple[str, ...]
     audio_clip_count: int
 
@@ -197,7 +199,9 @@ class EditorRenderer:
         tps = tl.time_base.ticks_per_second
         visual_clips = sorted(
             (clip for clip in tl.clips if tracks.get(clip.track_id) is not None
-             and tracks[clip.track_id].kind in {"video", "overlay"}),
+             and tracks[clip.track_id].kind in {"video", "overlay"}
+             and timeline_assets.get(clip.asset_id) is not None
+             and timeline_assets[clip.asset_id].kind != "text"),
             key=lambda clip: (clip.start_tick, clip.clip_id),
         )
 
@@ -207,12 +211,11 @@ class EditorRenderer:
                 previous = visual_clips[index - 1] if index else None
                 if previous is None or previous.start_tick + previous.duration_ticks != clip.start_tick:
                     raise EditorRenderError("incoming transition requires an adjacent preceding clip")
+        project_assets = {}
         for clip in tl.clips:
             asset = timeline_assets.get(clip.asset_id)
             if asset is not None and asset.kind == "text":
-                raise EditorRenderError("text assets are not renderable")
-        project_assets = {}
-        for clip in tl.clips:
+                continue
             if clip.asset_id in project_assets:
                 continue
             try:
@@ -237,8 +240,11 @@ class EditorRenderer:
             raise EditorRenderError(f"timeline validation failed: {', '.join(codes)}")
 
         for clip in tl.clips:
+            asset = timeline_assets.get(clip.asset_id)
+            if asset is not None and asset.kind == "text":
+                continue
             project_asset = project_assets[clip.asset_id]
-            kind = timeline_assets.get(clip.asset_id).kind if clip.asset_id in timeline_assets else project_asset.kind
+            kind = asset.kind if asset is not None else project_asset.kind
             if kind in {"video", "audio", "music"}:
                 source_in, source_out = _source_range(clip, project_asset)
                 source_frames = (source_out - source_in) * fps / 1000
@@ -318,14 +324,36 @@ class EditorRenderer:
                 duration_frames=timeline_frames, transition_in="cut", transition_frames=0,
             ))
 
+        text_overlays: list[TextOverlay] = []
+        for clip in sorted(tl.clips, key=lambda item: (item.start_tick, item.clip_id)):
+            track = tracks.get(clip.track_id)
+            asset = timeline_assets.get(clip.asset_id)
+            if track is None or track.kind != "overlay" or asset is None or asset.kind != "text":
+                continue
+            start_frame = _frame(clip.start_tick, fps, tps)
+            end_frame = _frame(clip.start_tick + clip.duration_ticks, fps, tps)
+            x = 0.5 + clip.transform.position_x
+            y = 0.8 + clip.transform.position_y
+            if not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in (x, y)):
+                raise EditorRenderError(
+                    f"text clip '{clip.clip_id}' is positioned outside the frame"
+                )
+            text_overlays.append(TextOverlay(
+                text=asset.text or "",
+                start_ms=round(start_frame * 1000 / fps),
+                end_ms=round(end_frame * 1000 / fps),
+                x=x,
+                y=y,
+            ))
+
         audio_placements: list[AudioPlacement] = []
         audio_clip_count = 0
         for clip in sorted(tl.clips, key=lambda item: (item.start_tick, item.clip_id)):
             track = tracks[clip.track_id]
             timeline_asset = timeline_assets[clip.asset_id]
-            project_asset = project_assets[clip.asset_id]
             if timeline_asset.kind == "image" or timeline_asset.kind == "text":
                 continue
+            project_asset = project_assets[clip.asset_id]
             path = library.resolve_source(clip.asset_id)
             if track.kind in {"video", "overlay"}:
                 if timeline_asset.kind != "video" or not _has_audio(path):
@@ -359,6 +387,7 @@ class EditorRenderer:
             width=settings.width, height=settings.height, fps=fps,
             duration_frames=timeline_frames, duration_ms=duration_ms,
             video_segments=tuple(visual_segments), audio_placements=tuple(audio_placements),
+            text_overlays=tuple(text_overlays),
             video_clip_order=tuple(clip_order), audio_clip_count=audio_clip_count,
         )
 
@@ -541,6 +570,15 @@ class EditorRenderer:
                     input_seeking=True, cancel=cancel,
                 )
                 self._check_cancel(cancel)
+                if plan.text_overlays:
+                    self._emit(progress, 0.82, "Burning text overlays")
+                    video_path = burn_text_to_file(
+                        video_path, list(plan.text_overlays), temp_dir / "text.mp4",
+                        cancel=cancel,
+                    )
+                    self._check_cancel(cancel)
+                else:
+                    self._emit(progress, 0.82, "Preparing verification")
                 self._emit(progress, 0.88, "Verifying render")
                 report = verify_render(
                     video_path, expected_width=plan.width, expected_height=plan.height,

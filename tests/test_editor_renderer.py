@@ -357,19 +357,6 @@ def test_missing_asset_reference_is_rejected(tmp_path):
         render_editor_timeline(timeline, library, tmp_path / "missing.mp4")
 
 
-def test_text_layout_is_rejected_until_a_graphics_renderer_exists(tmp_path):
-    from poc.execute.editor_render import (
-        EditorRenderError,
-        build_editor_render_plan,
-        render_editor_timeline,
-    )
-    library = ProjectAssetLibrary.create(tmp_path / "project", project_id="renderer-test")
-    text = MediaAsset(asset_id="text", kind="text", text="Hello")
-    timeline = _timeline([text], [_visual_clip("text", text, "overlay", 0, 1000)], 1000)
-    with pytest.raises(EditorRenderError, match="text assets are not renderable"):
-        render_editor_timeline(timeline, library, tmp_path / "text.mp4")
-
-
 def test_legacy_renderer_path_remains_separate():
     from poc.timeline import Timeline
     legacy = Timeline.load(Path(__file__).resolve().parent.parent / "examples" / "hand_timeline.json")

@@ -156,3 +156,24 @@ def test_trim_uses_correct_source_time_with_input_seeking(tmp_path):
     b = f[45].reshape(-1, 3).mean(0)
     assert g[1] > 100 and g[0] < 60 and g[2] < 60
     assert b[2] > 200 and b[0] < 60 and b[1] < 60
+
+def test_text_clip_is_burned_over_video(tmp_path):
+    from poc.timeline import MediaAsset
+    lib, (r,) = _lib(tmp_path, FIX/"solid_blue.mp4")
+    title = MediaAsset(asset_id="title", kind="text", text="HELLO")
+    tracks = TRACKS + [Track(track_id="titles", kind="overlay", layer_id="v")]
+    tl = EditorTimeline(project_id="p26", timeline_id="t", duration_ticks=3000,
+                        time_base=TimeBase(ticks_per_second=1000),
+                        settings=EditorSettings(fps_num=30, fps_den=1, width=640, height=360),
+                        assets=[r, title], layers=LAYERS, tracks=tracks,
+                        clips=[_clip("r", r, 0, 3000, 0),
+                               EditorClip(clip_id="t", asset_id="title", track_id="titles",
+                                          start_tick=500, duration_ticks=2000)])
+    res = render_editor_timeline(tl, lib, tmp_path/"o.mp4")
+    f = _frames(res.out_path)
+    white = lambda img: int((img.min(axis=2) > 200).sum())
+    assert white(f[10]) == 0
+    assert white(f[45]) > 200
+    assert white(f[80]) == 0
+    assert res.video_clip_order == ("r",)
+    assert res.report.ok, res.report.problems
