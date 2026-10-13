@@ -24,6 +24,7 @@ function App() {
   const [previewRender, setPreviewRender] = useState('');
   const [name, setName] = useState('My project');
   const [error, setError] = useState('');
+  const [timelineError, setTimelineError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [revision, setRevision] = useState(1);
   const [issues, setIssues] = useState<Array<{ code: string; message: string; clip_id?: string }>>([]);
@@ -32,10 +33,13 @@ function App() {
   const [showAutoEdit, setShowAutoEdit] = useState(false);
   const [autoEditError, setAutoEditError] = useState<string | null>(null);
   const [history, setHistory] = useState<History<Timeline> | null>(null);
+  const [saveCycle, setSaveCycle] = useState(0);
   const dirty = useRef(false);
+  const saveInFlight = useRef(false);
   const previewJob = useRef(false);
   const autoEditJob = useRef(false);
   const historyRef = useRef<History<Timeline> | null>(null);
+  const coalesceRef = useRef<{ key: string; timer: number } | null>(null);
 
   const refreshProjects = async () => setProjects((await api<{ projects: Project[] }>('/api/projects')).projects);
   const runCheck = async (pid: string) => {
@@ -67,6 +71,8 @@ function App() {
     const pid = project.project_id;
     const pending = timeline;
     const timer = window.setTimeout(async () => {
+      if (saveInFlight.current) return;
+      saveInFlight.current = true;
       dirty.current = false;
       setSaveMessage('Saving…');
       try {
@@ -81,9 +87,10 @@ function App() {
           await runCheck(pid);
         }
       } catch (e) { setSaveMessage('Save failed'); setError(e instanceof Error ? e.message : String(e)); dirty.current = true; }
+      finally { saveInFlight.current = false; setSaveCycle(value => value + 1); }
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [timeline, project, revision]);
+  }, [timeline, project, revision, saveCycle]);
 
   useEffect(() => {
     if (!job || !project || !['queued', 'running'].includes(job.status)) return;
@@ -130,13 +137,36 @@ function App() {
       setAssets(result.assets); setError('');
     } catch (e) { setError(String(e)); }
   };
-  const updateTimeline = (next: Timeline) => {
+  const endCoalesce = (key: string) => {
+    if (coalesceRef.current?.key === key) {
+      window.clearTimeout(coalesceRef.current.timer);
+      coalesceRef.current = null;
+    }
+  };
+  const updateTimeline = (next: Timeline, context?: string) => {
+    if (context === 'preview') { setTimeline(next); return; }
     dirty.current = true;
     const prior = historyRef.current;
-    if (prior) { const nextHistory = push(prior, next); historyRef.current = nextHistory; setHistory(nextHistory); }
+    if (prior) {
+      let nextHistory: History<Timeline>;
+      if (context && context !== 'commit' && coalesceRef.current?.key === context) {
+        nextHistory = { ...prior, present: next, future: [] };
+        window.clearTimeout(coalesceRef.current.timer);
+        coalesceRef.current.timer = window.setTimeout(() => endCoalesce(context), 1000);
+      } else {
+        if (coalesceRef.current) { window.clearTimeout(coalesceRef.current.timer); coalesceRef.current = null; }
+        nextHistory = push(prior, next);
+        if (context && context !== 'commit') {
+          const timer = window.setTimeout(() => endCoalesce(context), 1000);
+          coalesceRef.current = { key: context, timer };
+        }
+      }
+      historyRef.current = nextHistory; setHistory(nextHistory);
+    }
     setTimeline(next);
   };
   const travelHistory = (move: (value: History<Timeline>) => History<Timeline>) => {
+    if (coalesceRef.current) { window.clearTimeout(coalesceRef.current.timer); coalesceRef.current = null; }
     const prior = historyRef.current;
     if (!prior) return;
     const next = move(prior);
@@ -149,6 +179,7 @@ function App() {
     const key = (event: KeyboardEvent) => {
       if ((event.target as HTMLElement | null)?.matches('input,textarea,select,[contenteditable=true]')) return;
       const mod = event.ctrlKey || event.metaKey;
+      if (mod && event.key.toLowerCase() === 's') { event.preventDefault(); return; }
       if (mod && event.key.toLowerCase() === 'z') {
         event.preventDefault(); event.shiftKey ? redoEdit() : undoEdit();
       } else if (mod && event.key.toLowerCase() === 'y') { event.preventDefault(); redoEdit(); }
@@ -209,14 +240,14 @@ function App() {
             <button className="quiet" onClick={redoEdit} disabled={!history || !canRedo(history)} title="Redo (Ctrl+Shift+Z / Ctrl+Y)">Redo</button></div>
             {autoEditError && <span className="error-text" role="alert">{autoEditError}</span>}
           </div>
-          <TimelineEditor timeline={timeline} assets={assets} projectId={project.project_id} selectedId={selectedClipId} onSelect={setSelectedClipId} playhead={playhead} onPlayhead={setPlayhead} onChange={updateTimeline} issues={issues} error={error.startsWith('Clip') ? error : ''} onError={setError}/>
+          <TimelineEditor timeline={timeline} assets={assets} projectId={project.project_id} selectedId={selectedClipId} onSelect={setSelectedClipId} playhead={playhead} onPlayhead={setPlayhead} onChange={updateTimeline} issues={issues} error={timelineError} onError={setTimelineError}/>
           <div className="editor-workbench">
             <section className="panel preview-panel"><div className="section-head"><div><h2>Preview</h2><span>{previewRender ? 'Quick preview render' : selectedAsset?.file_name ?? 'Select a media item'}</span></div><span className="panel-dot"/></div>
               {previewUrl && selectedAsset?.kind !== 'image' ? <video key={previewUrl} src={previewUrl} controls autoPlay={!!previewRender}/> : previewUrl ? <img className="still-preview" src={previewUrl} alt="Selected still"/> : <div className="preview-empty"><span>▶</span><p>Select a video to preview</p></div>}
               <button className="quiet preview-render" disabled={!readiness?.ok || checking || job?.status === 'running'} onClick={() => void startRender(true)}>Quick preview render</button>
             </section>
-            <Inspector timeline={timeline} clip={selectedClip} catalogue={catalogue} onChange={updateTimeline}/>
-            <section className="panel export-panel"><div className="section-head"><div><h2>Export</h2><span>{checking ? 'Checking timeline…' : 'Ready to export'}</span></div><span className={`readiness-dot ${readiness?.ok ? 'ready' : ''}`}/></div>
+            <Inspector timeline={timeline} clip={selectedClip} catalogue={catalogue} onChange={updateTimeline} onCoalesceEnd={endCoalesce}/>
+            <section className="panel export-panel"><div className="section-head"><div><h2>Export</h2><span>{checking ? 'Checking timeline…' : readiness?.ok ? 'Ready to export' : 'Resolve timeline issues'}</span></div><span className={`readiness-dot ${readiness?.ok ? 'ready' : ''}`}/></div>
               {!readiness?.ok && readiness?.error && <p className="readiness-error">{readiness.error}</p>}
               <p className={`save-state ${saveMessage === 'Saved' ? 'saved' : ''}`}>{saveMessage}</p>
               <label htmlFor="profile">Export profile</label><select id="profile" value={profile} onChange={e => setProfile(e.target.value)}>{profiles.map(p => <option key={p} value={p}>{p.replaceAll('_', ' ')}</option>)}</select>

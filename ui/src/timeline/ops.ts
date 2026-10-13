@@ -87,7 +87,11 @@ export function moveClip(tl: Timeline, clipId: string, newStartTick: number, tra
 export function trimStart(tl: Timeline, clipId: string, newStartTick: number): Timeline {
   const clip = clone(clipFor(tl, clipId));
   const oldEnd = clip.start_tick + clip.duration_ticks;
-  const start = Math.min(Math.max(0, snapToFrame(tl, newStartTick)), oldEnd - frameTicks(tl));
+  const earliest = clip.source_in_ms === null ? 0
+    : Math.max(0, clip.start_tick - msToTicks(tl, clip.source_in_ms));
+  const frame = frameTicks(tl);
+  const minStart = snapToFrame(tl, Math.ceil((earliest - 1e-9) / frame) * frame);
+  const start = Math.min(Math.max(minStart, snapToFrame(tl, newStartTick)), oldEnd - frame);
   const delta = start - clip.start_tick;
   clip.start_tick = start;
   clip.duration_ticks = oldEnd - start;
@@ -129,6 +133,11 @@ export function splitAt(tl: Timeline, clipId: string, tick: number, newClipId: s
     const splitMs = Math.round(ticksToMs(tl, leftDuration));
     original.source_out_ms = (original.source_in_ms ?? 0) + splitMs;
     right.source_in_ms = original.source_out_ms;
+  }
+  const audio = original.audio;
+  if (audio) {
+    original.audio = { ...audio, fade_out_ms: 0 };
+    right.audio = { ...audio, fade_in_ms: 0 };
   }
   original.duration_ticks = leftDuration;
   const clips = tl.clips.flatMap(item => item.clip_id === clipId ? [original, right] : [clone(item)]);

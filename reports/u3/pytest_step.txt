@@ -1,0 +1,54 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.7, pytest-9.1.1, pluggy-1.6.0 -- D:\Python\video editor\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: D:\Python\video editor
+configfile: pyproject.toml
+plugins: anyio-4.15.1, timeout-2.4.0
+collecting ... collected 38 items
+
+tests/test_server_u3.py::test_auto_edit_builds_a_beat_synced_renderable_timeline PASSED [  2%]
+tests/test_server_u3.py::test_auto_edit_rejects_a_stale_revision PASSED  [  5%]
+tests/test_server_u3.py::test_auto_edit_validates_its_request[bad0] PASSED [  7%]
+tests/test_server_u3.py::test_auto_edit_validates_its_request[bad1] PASSED [ 10%]
+tests/test_server_u3.py::test_auto_edit_validates_its_request[bad2] PASSED [ 13%]
+tests/test_server_u3.py::test_auto_edit_validates_its_request[bad3] PASSED [ 15%]
+tests/test_server_u3.py::test_auto_edit_validates_its_request[bad4] PASSED [ 18%]
+tests/test_server_u3.py::test_auto_edit_failure_is_explained_and_leaves_timeline_untouched PASSED [ 21%]
+tests/test_server_u2.py::test_index_sets_strict_httponly_session_cookie PASSED [ 23%]
+tests/test_server_u2.py::test_index_has_strict_csp_and_no_store PASSED   [ 26%]
+tests/test_server_u2.py::test_media_streams_with_cookie_but_cookie_cannot_change_state PASSED [ 28%]
+tests/test_server_u2.py::test_catalogue_lists_items_with_renderability_and_schema PASSED [ 31%]
+tests/test_server_u2.py::test_check_reports_render_readiness PASSED      [ 34%]
+tests/test_server_u2.py::test_check_explains_why_a_timeline_cannot_render PASSED [ 36%]
+tests/test_server_u2.py::test_save_returns_issue_messages PASSED         [ 39%]
+tests/test_server_u2.py::test_text_assets_survive_save PASSED            [ 42%]
+tests/test_server_api.py::test_requests_without_token_are_rejected PASSED [ 44%]
+tests/test_server_api.py::test_foreign_host_header_is_rejected PASSED    [ 47%]
+tests/test_server_api.py::test_server_refuses_non_loopback_bind[0.0.0.0] PASSED [ 50%]
+tests/test_server_api.py::test_server_refuses_non_loopback_bind[192.168.1.5] PASSED [ 52%]
+tests/test_server_api.py::test_server_refuses_non_loopback_bind[::] PASSED [ 55%]
+tests/test_server_api.py::test_server_refuses_non_loopback_bind[example.com] PASSED [ 57%]
+tests/test_server_api.py::test_loopback_bind_is_allowed PASSED           [ 60%]
+tests/test_server_api.py::test_cross_origin_requests_get_no_cors_grant PASSED [ 63%]
+tests/test_server_api.py::test_network_paths_cannot_be_imported PASSED   [ 65%]
+tests/test_server_api.py::test_unknown_ids_are_404 PASSED                [ 68%]
+tests/test_server_api.py::test_import_lists_assets_with_probe_info PASSED [ 71%]
+tests/test_server_api.py::test_proxy_supports_range_requests PASSED      [ 73%]
+tests/test_server_api.py::test_thumbnail_is_jpeg PASSED                  [ 76%]
+tests/test_server_api.py::test_new_project_has_default_tracks PASSED     [ 78%]
+tests/test_server_api.py::test_timeline_save_uses_revisions PASSED       [ 81%]
+tests/test_server_api.py::test_saved_timeline_survives_server_restart PASSED [ 84%]
+tests/test_server_api.py::test_render_job_produces_verified_file PASSED  [ 86%]
+tests/test_server_api.py::test_render_job_can_be_cancelled PASSED        [ 89%]
+tests/test_server_api.py::test_unknown_profile_is_rejected PASSED        [ 92%]
+tests/test_server_api.py::test_index_page_carries_token_for_same_origin_ui PASSED [ 94%]
+tests/test_server_api.py::test_built_ui_loads_nothing_from_the_internet PASSED [ 97%]
+tests/test_smoke_tool.py::test_smoke_tool_writes_success_report PASSED   [100%]
+
+============================== warnings summary ===============================
+.venv\Lib\site-packages\starlette\testclient.py:37
+  D:\Python\video editor\.venv\Lib\site-packages\starlette\testclient.py:37: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = typing.Callable[[], typing.ContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 38 passed, 1 warning in 28.71s ========================

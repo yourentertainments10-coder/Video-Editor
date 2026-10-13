@@ -19,6 +19,7 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
   const [musicAssetId, setMusicAssetId] = useState('');
   const [mood, setMood] = useState<'energetic' | 'calm'>('energetic');
   const [durationS, setDurationS] = useState(30);
+  const [confirmReplace, setConfirmReplace] = useState(false);
   const [selectedVideos, setSelectedVideos] = useState<Set<string>>(() => new Set(videos.map(video => video.asset_id)));
 
   return <div className="modal-backdrop" role="presentation">
@@ -26,7 +27,7 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
       <div className="section-head"><div><h2 id="auto-edit-title">Auto-edit</h2><span>Build a beat-synced timeline from this project</span></div>
         {!active && <button className="quiet" aria-label="Close auto-edit" onClick={onClose}>×</button>}
       </div>
-      {hasClips && <p className="auto-edit-warning">Replace current timeline? You can undo this.</p>}
+      {hasClips && !confirmReplace && <p className="auto-edit-warning">Creating a timeline will replace the current clips.</p>}
       <label>Music<select aria-label="Music" value={musicAssetId} onChange={event => setMusicAssetId(event.target.value)} disabled={active}>
         <option value="">Choose audio…</option>{musicAssets.map(asset => <option key={asset.asset_id} value={asset.asset_id}>{asset.file_name}</option>)}
       </select></label>
@@ -42,9 +43,13 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
       </label>)}</fieldset>
       {active && <><div className="job-line"><span>{message}</span><strong>{Math.round(progress * 100)}%</strong></div><div className="progress"><i style={{ width: `${progress * 100}%` }}/></div></>}
       {error && <p className="error-text" role="alert">{error}</p>}
-      <div className="auto-edit-actions">{active ? <button className="quiet" onClick={onCancel}>Cancel</button> : <>
+      {confirmReplace && !active && <p className="auto-edit-warning" role="alert">Replace current timeline? You can undo this.</p>}
+      <div className="auto-edit-actions">{active ? <button className="quiet" onClick={onCancel}>Cancel</button> : confirmReplace ? <>
+        <button className="quiet" onClick={() => setConfirmReplace(false)}>Cancel</button><button className="primary" disabled={!musicAssetId || durationS <= 0 || selectedVideos.size === 0}
+          onClick={() => onStart({ musicAssetId, mood, durationS, videoAssetIds: [...selectedVideos] })}>Replace</button>
+      </> : <>
         <button className="quiet" onClick={onClose}>Close</button><button className="primary" disabled={!musicAssetId || durationS <= 0 || selectedVideos.size === 0}
-          onClick={() => onStart({ musicAssetId, mood, durationS, videoAssetIds: [...selectedVideos] })}>Create timeline</button>
+          onClick={() => hasClips ? setConfirmReplace(true) : onStart({ musicAssetId, mood, durationS, videoAssetIds: [...selectedVideos] })}>Create timeline</button>
       </>}</div>
     </section>
   </div>;

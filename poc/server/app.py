@@ -53,27 +53,60 @@ def _library(root: Path) -> ProjectAssetLibrary:
     return ProjectAssetLibrary.load(root)
 
 
+def _range_file_response(path: Path, range_header: str | None, media_type: str):
+    headers = {"Accept-Ranges": "bytes", "Content-Type": media_type}
+    if not range_header:
+        return FileResponse(path, media_type=media_type, headers=headers)
+    size = path.stat().st_size
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+    if not match or (not match.group(1) and not match.group(2)):
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+    if match.group(1):
+        start = int(match.group(1)); end = int(match.group(2) or size - 1)
+    else:
+        suffix = int(match.group(2)); start = max(0, size - suffix); end = size - 1
+    if start >= size or end < start:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+    end = min(end, size - 1)
+    length = end - start + 1
+    headers.update({"Content-Range": f"bytes {start}-{end}/{size}", "Content-Length": str(length)})
+
+    def blocks():
+        with path.open("rb") as stream:
+            stream.seek(start)
+            remaining = length
+            while remaining:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    return StreamingResponse(blocks(), status_code=206, headers=headers, media_type=media_type)
+
+
 def _asset_info(item, probe_cache: dict[str, dict[str, Any]], probe_lock: threading.Lock) -> dict[str, Any]:
     cache_key = f"{item.kind}:{item.content_hash}"
     with probe_lock:
         cached = probe_cache.get(cache_key)
-        if cached is None:
-            media = item.media_asset
-            try:
-                normalized = normalize_asset(media)
-                cached = {
-                    "width": normalized.width, "height": normalized.height,
-                    "fps": normalized.fps, "has_audio": normalized.has_audio,
-                    "rotation": normalized.rotation_degrees, "hdr": normalized.is_hdr,
-                }
-            except Exception:
-                cached = {
-                    "width": item.metadata.get("width"), "height": item.metadata.get("height"),
-                    "fps": item.metadata.get("fps"),
-                    "has_audio": bool(item.metadata.get("has_audio", False)),
-                    "rotation": 0, "hdr": False,
-                }
-            probe_cache[cache_key] = cached
+    if cached is None:
+        media = item.media_asset
+        try:
+            normalized = normalize_asset(media)
+            probed = {
+                "width": normalized.width, "height": normalized.height,
+                "fps": normalized.fps, "has_audio": normalized.has_audio,
+                "rotation": normalized.rotation_degrees, "hdr": normalized.is_hdr,
+            }
+        except Exception:
+            probed = {
+                "width": item.metadata.get("width"), "height": item.metadata.get("height"),
+                "fps": item.metadata.get("fps"),
+                "has_audio": bool(item.metadata.get("has_audio", False)),
+                "rotation": 0, "hdr": False,
+            }
+        with probe_lock:
+            cached = probe_cache.setdefault(cache_key, probed)
     return {
         "asset_id": item.asset_id, "kind": item.kind,
         "file_name": Path(item.source_path).name, "duration_ms": item.duration_ms,
@@ -222,33 +255,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             path = make_proxy(asset, data_dir / "cache")
         except (AssetImportError, FileNotFoundError, ValueError) as exc:
             raise HTTPException(404, "asset not found or cannot be proxied") from exc
-        size = path.stat().st_size
-        headers = {"Accept-Ranges": "bytes", "Content-Type": "video/mp4"}
-        if range_header:
-            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
-            if not match or (not match.group(1) and not match.group(2)):
-                return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
-            if match.group(1):
-                start = int(match.group(1)); end = int(match.group(2) or size - 1)
-            else:
-                suffix = int(match.group(2)); start = max(0, size - suffix); end = size - 1
-            if start >= size or end < start:
-                return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
-            end = min(end, size - 1)
-            length = end - start + 1
-            headers.update({"Content-Range": f"bytes {start}-{end}/{size}", "Content-Length": str(length)})
-            def blocks():
-                with path.open("rb") as stream:
-                    stream.seek(start)
-                    remaining = length
-                    while remaining:
-                        chunk = stream.read(min(1024 * 1024, remaining))
-                        if not chunk:
-                            break
-                        remaining -= len(chunk)
-                        yield chunk
-            return StreamingResponse(blocks(), status_code=206, headers=headers, media_type="video/mp4")
-        return FileResponse(path, media_type="video/mp4", headers=headers)
+        return _range_file_response(path, range_header, "video/mp4")
 
     @app.get("/api/projects/{pid}/assets/{aid}/thumbnails/{n}")
     def asset_thumbnail(pid: str, aid: str, n: int):
@@ -438,6 +445,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
                     source_to_asset_id=source_to_asset_id,
                     music_asset_id=music_asset_id,
                     settings=current.settings,
+                    timeline_id=current.timeline_id,
                 )
                 with app.state.timeline_lock:
                     latest = EditorTimeline.load(root / "timeline.json")
@@ -600,33 +608,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             raise HTTPException(404, "export not found") from exc
         if not target.is_file():
             raise HTTPException(404, "export not found")
-        size = target.stat().st_size
-        headers = {"Accept-Ranges": "bytes", "Content-Type": "video/mp4"}
-        if range_header:
-            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
-            if not match or (not match.group(1) and not match.group(2)):
-                return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
-            if match.group(1):
-                start = int(match.group(1)); end = int(match.group(2) or size - 1)
-            else:
-                suffix = int(match.group(2)); start = max(0, size - suffix); end = size - 1
-            if start >= size or end < start:
-                return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
-            end = min(end, size - 1)
-            length = end - start + 1
-            headers.update({"Content-Range": f"bytes {start}-{end}/{size}", "Content-Length": str(length)})
-            def blocks():
-                with target.open("rb") as stream:
-                    stream.seek(start)
-                    remaining = length
-                    while remaining:
-                        chunk = stream.read(min(1024 * 1024, remaining))
-                        if not chunk:
-                            break
-                        remaining -= len(chunk)
-                        yield chunk
-            return StreamingResponse(blocks(), status_code=206, headers=headers, media_type="video/mp4")
-        return FileResponse(target, media_type="video/mp4", headers=headers)
+        return _range_file_response(target, range_header, "video/mp4")
 
     @app.get("/")
     def index():

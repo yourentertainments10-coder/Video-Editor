@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Mapping
-from uuid import uuid4
 
 from poc.project_assets import ProjectAssetLibrary
 from poc.timeline import (
@@ -19,6 +18,7 @@ def legacy_to_editor(
     source_to_asset_id: Mapping[str | Path, str],
     music_asset_id: str,
     settings: EditorSettings,
+    timeline_id: str | None = None,
 ) -> EditorTimeline:
     """Convert one legacy cut into the standard editor project tracks."""
     lookup = {str(key): value for key, value in source_to_asset_id.items()}
@@ -69,7 +69,7 @@ def legacy_to_editor(
     assets = [item.media_asset for item in library.project.assets]
     return EditorTimeline(
         project_id=library.project.project_id,
-        timeline_id=f"timeline_{uuid4().hex[:8]}",
+        timeline_id=timeline_id or "timeline_auto_edit",
         duration_ticks=legacy.duration_ms,
         time_base=TimeBase(ticks_per_second=1000),
         settings=settings,

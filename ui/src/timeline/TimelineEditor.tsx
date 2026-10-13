@@ -11,7 +11,7 @@ type Props = {
   timeline: Timeline; assets: Asset[]; projectId: string;
   selectedId: string | null; onSelect: (id: string | null) => void;
   playhead: number; onPlayhead: (tick: number) => void;
-  onChange: (timeline: Timeline) => void; issues: Array<{ clip_id?: string; message: string }>;
+  onChange: (timeline: Timeline, mode?: 'preview' | 'commit') => void; issues: Array<{ clip_id?: string; message: string }>;
   error: string; onError: (value: string) => void;
 };
 
@@ -42,11 +42,14 @@ export function TimelineEditor({ timeline, assets, projectId, selectedId, onSele
     if (assetId) {
       const asset = byId.get(assetId);
       if (!asset) return;
-      const targetTrack = asset.kind === 'video' ? 'video' : asset.kind === 'image' || asset.kind === 'text' ? 'overlay' : trackId;
+      const targetTrack = asset.kind === 'video' ? 'video'
+        : asset.kind === 'image' || asset.kind === 'text' ? 'overlay'
+          : asset.kind === 'audio' || asset.kind === 'music' ? (trackId === 'music' ? 'music' : 'voice') : trackId;
       apply(() => addClip(timeline, asset, targetTrack, snapNear(raw), `clip_${crypto.randomUUID().slice(0, 8)}`));
     } else if (clipId) {
       const clip = timeline.clips.find(item => item.clip_id === clipId);
-      if (clip) apply(() => moveClip(timeline, clipId, snapNear(raw - clip.duration_ticks / 2, clipId), trackId));
+      const grabOffset = Number(event.dataTransfer.getData('application/x-editor-clip-offset') || 0);
+      if (clip) apply(() => moveClip(timeline, clipId, snapNear(raw - grabOffset, clipId), trackId));
     }
   };
   const splitSelected = () => {
@@ -61,6 +64,7 @@ export function TimelineEditor({ timeline, assets, projectId, selectedId, onSele
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if ((event.target as HTMLElement | null)?.matches('input,textarea,select,[contenteditable=true]')) return;
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
       if (event.key.toLowerCase() === 's') { event.preventDefault(); splitSelected(); }
       else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); deleteSelected(); }
       else if (event.key.toLowerCase() === 't') {
@@ -75,17 +79,22 @@ export function TimelineEditor({ timeline, assets, projectId, selectedId, onSele
   const beginTrim = (event: React.PointerEvent, clipId: string, side: 'start' | 'end') => {
     event.preventDefault(); event.stopPropagation();
     const initial = timeline;
+    let latest: Timeline | null = null;
     const region = (event.currentTarget as HTMLElement).parentElement?.parentElement;
     if (!region) return;
     const rect = region.getBoundingClientRect();
     const onMove = (move: PointerEvent) => {
       const tick = snapNear(Math.max(0, (move.clientX - rect.left) / scale), clipId);
       try {
-        onChange(side === 'start' ? trimStart(initial, clipId, tick) : trimEnd(initial, clipId, tick));
+        latest = side === 'start' ? trimStart(initial, clipId, tick) : trimEnd(initial, clipId, tick);
+        onChange(latest, 'preview');
         onError('');
       } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
     };
-    const done = () => { document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', done); };
+    const done = () => {
+      document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', done);
+      if (latest) onChange(latest, 'commit');
+    };
     document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', done, { once: true });
   };
 
@@ -110,7 +119,12 @@ export function TimelineEditor({ timeline, assets, projectId, selectedId, onSele
               const asset = byId.get(clip.asset_id) ?? timeline.assets.find(item => item.asset_id === clip.asset_id);
               const issueCount = issues.filter(issue => issue.clip_id === clip.clip_id).length;
               return <div className={`timeline-clip ${selectedId === clip.clip_id ? 'selected' : ''} ${asset?.kind === 'text' ? 'text-clip' : ''}`} key={clip.clip_id}
-                draggable onDragStart={event => { event.dataTransfer.setData('application/x-editor-clip', clip.clip_id); event.dataTransfer.effectAllowed = 'move'; }}
+                draggable onDragStart={event => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  event.dataTransfer.setData('application/x-editor-clip', clip.clip_id);
+                  event.dataTransfer.setData('application/x-editor-clip-offset', String((event.clientX - rect.left) / scale));
+                  event.dataTransfer.effectAllowed = 'move';
+                }}
                 onClick={event => { event.stopPropagation(); onSelect(clip.clip_id); }}
                 style={{ left: clip.start_tick * scale, width: Math.max(36, clip.duration_ticks * scale) }} title={`${asset?.file_name ?? asset?.text ?? 'Clip'} · ${Math.round(clip.duration_ticks)} ticks`}>
                 <span className="trim-handle left" onPointerDown={event => beginTrim(event, clip.clip_id, 'start')} />

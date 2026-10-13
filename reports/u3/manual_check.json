@@ -1,0 +1,125 @@
+﻿{
+    "auto_edit_mood":  "energetic",
+    "auto_edit_duration_s":  30,
+    "timeline_id_before":  "timeline_66986d64",
+    "timeline_id_after":  "timeline_66986d64",
+    "timeline_id_preserved":  true,
+    "video_clip_count":  55,
+    "move_undo_restored":  true,
+    "trim_undo_restored":  true,
+    "trim_before":  {
+                        "clip_id":  "c000",
+                        "asset_id":  "asset_e145b0e2830d6f9b96df0b60eacf9e71",
+                        "track_id":  "video",
+                        "start_tick":  0,
+                        "duration_ticks":  767,
+                        "source_in_ms":  140700,
+                        "source_out_ms":  141467,
+                        "transform":  {
+                                          "crop":  null,
+                                          "scale_x":  1,
+                                          "scale_y":  1,
+                                          "position_x":  0,
+                                          "position_y":  0,
+                                          "opacity":  1
+                                      },
+                        "audio":  null,
+                        "transition":  null,
+                        "effects":  [
+
+                                    ],
+                        "animations":  [
+
+                                       ],
+                        "score":  0.7253877661328214,
+                        "rationale":  {
+                                          "quality":  0.9355860003914949,
+                                          "motion_match":  0.9948316649894956,
+                                          "reuse":  0,
+                                          "coverage":  0
+                                      }
+                    },
+    "trim_after_undo":  {
+                            "clip_id":  "c000",
+                            "asset_id":  "asset_e145b0e2830d6f9b96df0b60eacf9e71",
+                            "track_id":  "video",
+                            "start_tick":  0,
+                            "duration_ticks":  767,
+                            "source_in_ms":  140700,
+                            "source_out_ms":  141467,
+                            "transform":  {
+                                              "crop":  null,
+                                              "scale_x":  1,
+                                              "scale_y":  1,
+                                              "position_x":  0,
+                                              "position_y":  0,
+                                              "opacity":  1
+                                          },
+                            "audio":  null,
+                            "transition":  null,
+                            "effects":  [
+
+                                        ],
+                            "animations":  [
+
+                                           ],
+                            "score":  0.7253877661328214,
+                            "rationale":  {
+                                              "quality":  0.9355860003914949,
+                                              "motion_match":  0.9948316649894956,
+                                              "reuse":  0,
+                                              "coverage":  0
+                                          }
+                        },
+    "music_splits":  [
+                         {
+                             "clip_id":  "auto_music",
+                             "fade_out_ms":  0,
+                             "fade_in_ms":  0,
+                             "start_tick":  0
+                         },
+                         {
+                             "clip_id":  "clip_b85e0e1c",
+                             "fade_out_ms":  1000,
+                             "fade_in_ms":  0,
+                             "start_tick":  15000
+                         }
+                     ],
+    "export_profile":  "youtube_1080p",
+    "export_ui":  "Render verified",
+    "auto_edit_job_status":  "done",
+    "render_job_id":  "d108b8665864",
+    "render_status":  "done",
+    "render_ok":  true,
+    "render_report":  {
+                          "ok":  true,
+                          "problems":  [
+
+                                       ],
+                          "measured":  {
+                                           "width":  1920,
+                                           "height":  1080,
+                                           "fps":  30.0,
+                                           "duration_ms":  29633.333333333332,
+                                           "video_codec":  "h264",
+                                           "pix_fmt":  "yuv420p",
+                                           "color_primaries":  "bt709",
+                                           "color_trc":  "bt709",
+                                           "colorspace":  "bt709",
+                                           "has_audio":  true,
+                                           "audio_rate":  48000,
+                                           "audio_channels":  2,
+                                           "lufs":  -14.1,
+                                           "true_peak":  -1.3,
+                                           "av_drift_ms":  -0.3333333333337407,
+                                           "faststart":  true,
+                                           "black_ranges":  [
+
+                                                            ]
+                                       }
+                      },
+    "render_path":  "D:\\Python\\video editor\\out\\manual_u3_fix_data2\\projects\\p_2b01ea8c\\exports\\youtube_1080p_d108b8665864.mp4",
+    "render_bytes":  12890501,
+    "manual_check_passed":  true,
+    "music_fade_split_semantics":  true
+}
