@@ -587,18 +587,18 @@ _PAN_SCHEMA = (
 )
 
 EFFECT_CATALOGUE: tuple[EffectMetadata, ...] = (
-    EffectMetadata(effect_id="fade_in", name="Fade In", parameter_schema=_FADE_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear opacity from 0 to 1 over duration_ms."),
-    EffectMetadata(effect_id="fade_out", name="Fade Out", parameter_schema=_FADE_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear opacity from 1 to 0 over duration_ms."),
-    EffectMetadata(effect_id="zoom_in", name="Zoom In", parameter_schema=_ZOOM_IN_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear scale interpolation from from_scale to to_scale over duration_ms."),
-    EffectMetadata(effect_id="zoom_out", name="Zoom Out", parameter_schema=_ZOOM_OUT_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear scale interpolation from from_scale to to_scale over duration_ms."),
-    EffectMetadata(effect_id="pan_left", name="Pan Left", parameter_schema=_PAN_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear horizontal translation left by normalized distance over duration_ms."),
-    EffectMetadata(effect_id="pan_right", name="Pan Right", parameter_schema=_PAN_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear horizontal translation right by normalized distance over duration_ms."),
-    EffectMetadata(effect_id="pan_up", name="Pan Up", parameter_schema=_PAN_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear vertical translation up by normalized distance over duration_ms."),
-    EffectMetadata(effect_id="pan_down", name="Pan Down", parameter_schema=_PAN_SCHEMA, renderable=False, deterministic=True, behavior_contract="Linear vertical translation down by normalized distance over duration_ms."),
-    EffectMetadata(effect_id="brightness", name="Brightness", parameter_schema=(_field_definition("amount", "number", required=True, minimum=-1.0, maximum=1.0),), renderable=False, deterministic=True, behavior_contract="Apply a constant normalized brightness adjustment amount."),
-    EffectMetadata(effect_id="contrast", name="Contrast", parameter_schema=(_field_definition("factor", "number", default=1.0, minimum=0.0, maximum=3.0),), renderable=False, deterministic=True, behavior_contract="Apply a constant contrast multiplier factor."),
-    EffectMetadata(effect_id="saturation", name="Saturation", parameter_schema=(_field_definition("factor", "number", default=1.0, minimum=0.0, maximum=3.0),), renderable=False, deterministic=True, behavior_contract="Apply a constant saturation multiplier factor."),
-    EffectMetadata(effect_id="blur", name="Blur", parameter_schema=(_field_definition("radius", "number", required=True, minimum=0.0, maximum=50.0),), renderable=False, deterministic=True, behavior_contract="Apply a constant blur radius in pixels."),
+    EffectMetadata(effect_id="fade_in", name="Fade In", parameter_schema=_FADE_SCHEMA, renderable=True, deterministic=True, behavior_contract="Linear opacity from 0 to 1 over duration_ms."),
+    EffectMetadata(effect_id="fade_out", name="Fade Out", parameter_schema=_FADE_SCHEMA, renderable=True, deterministic=True, behavior_contract="Linear opacity from 1 to 0 over duration_ms."),
+    EffectMetadata(effect_id="zoom_in", name="Zoom In", parameter_schema=_ZOOM_IN_SCHEMA, renderable=True, deterministic=True, behavior_contract="Linear scale interpolation from from_scale to to_scale over duration_ms."),
+    EffectMetadata(effect_id="zoom_out", name="Zoom Out", parameter_schema=_ZOOM_OUT_SCHEMA, renderable=True, deterministic=True, behavior_contract="Linear scale interpolation from from_scale to to_scale over duration_ms."),
+    EffectMetadata(effect_id="pan_left", name="Pan Left", parameter_schema=_PAN_SCHEMA, renderable=True, deterministic=True, behavior_contract="Linear horizontal translation left by normalized distance over duration_ms."),
+    EffectMetadata(effect_id="pan_right", name="Pan Right", parameter_schema=_PAN_SCHEMA, renderable=True, deterministic=True, behavior_contract="Linear horizontal translation right by normalized distance over duration_ms."),
+    EffectMetadata(effect_id="pan_up", name="Pan Up", parameter_schema=_PAN_SCHEMA, renderable=True, deterministic=True, behavior_contract="Linear vertical translation up by normalized distance over duration_ms."),
+    EffectMetadata(effect_id="pan_down", name="Pan Down", parameter_schema=_PAN_SCHEMA, renderable=True, deterministic=True, behavior_contract="Linear vertical translation down by normalized distance over duration_ms."),
+    EffectMetadata(effect_id="brightness", name="Brightness", parameter_schema=(_field_definition("amount", "number", required=True, minimum=-1.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Apply a constant normalized brightness adjustment amount."),
+    EffectMetadata(effect_id="contrast", name="Contrast", parameter_schema=(_field_definition("factor", "number", default=1.0, minimum=0.0, maximum=3.0),), renderable=True, deterministic=True, behavior_contract="Apply a constant contrast multiplier factor."),
+    EffectMetadata(effect_id="saturation", name="Saturation", parameter_schema=(_field_definition("factor", "number", default=1.0, minimum=0.0, maximum=3.0),), renderable=True, deterministic=True, behavior_contract="Apply a constant saturation multiplier factor."),
+    EffectMetadata(effect_id="blur", name="Blur", parameter_schema=(_field_definition("radius", "number", required=True, minimum=0.0, maximum=50.0),), renderable=True, deterministic=True, behavior_contract="Apply a constant blur radius in pixels."),
 )
 
 

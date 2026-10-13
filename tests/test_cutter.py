@@ -117,7 +117,8 @@ def test_cutter_is_deterministic_for_identical_inputs():
     mm, footage_maps = _simple_inputs()
     tl_a = cut(mm, "music.mp3", footage_maps, "energetic", duration_s=6.0)
     tl_b = cut(mm, "music.mp3", footage_maps, "energetic", duration_s=6.0)
-    assert tl_a == tl_b
+    ignore = {"provenance": {"created_at"}}
+    assert tl_a.model_dump(exclude=ignore) == tl_b.model_dump(exclude=ignore)
 
 
 def test_cutter_never_reuses_overlapping_source_ranges():

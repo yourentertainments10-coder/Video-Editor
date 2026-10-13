@@ -284,10 +284,10 @@ def test_non_renderable_effect_is_rejected_clearly(tmp_path):
     library, assets = _project(tmp_path, source)
     asset = assets[source.name]
     clip = _visual_clip("one", asset, "video", 0, 1000, 0, 1000).model_copy(
-        update={"effects": [EffectRef(effect_id="brightness", parameters={"amount": 0.2})]}
+        update={"effects": [EffectRef(effect_id="zoom_out", parameters={"from_scale": 1.0, "to_scale": 0.5})]}
     )
     timeline = _timeline([asset], [clip], 1000)
-    with pytest.raises(EditorRenderError, match="effect.*brightness.*not renderable"):
+    with pytest.raises(EditorRenderError, match="effect.*zoom_out.*not renderable"):
         render_editor_timeline(timeline, library, tmp_path / "effect.mp4")
 
 

@@ -143,6 +143,6 @@ def test_catalogue_declares_renderer_status_and_determinism():
         "pan_left", "pan_right", "pan_up", "pan_down",
         "brightness", "contrast", "saturation", "blur",
     ]
-    assert all(not entry.renderable for entry in EFFECT_CATALOGUE)
+    assert all(item.renderable for item in EFFECT_CATALOGUE)
     assert all(entry.deterministic for entry in EFFECT_CATALOGUE)
     assert get_effect_metadata("brightness").parameter_schema

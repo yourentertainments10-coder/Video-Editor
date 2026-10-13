@@ -252,6 +252,13 @@ def main():
         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(marker_path)
     ], "left marker for vertical fit tests")
 
+    marker_60_path = fixtures_dir / "marker_left_60.mp4"
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "color=c=gray:s=1920x1080:r=60:d=2",
+        "-vf", "drawbox=x=200:y=440:w=200:h=200:color=white:t=fill",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(marker_60_path)
+    ], "60 fps left marker for timeline-speed effect tests")
+
     # 14. Solid-color clips for centered-cut transition tests.
     for color in ("red", "green", "blue"):
         run_ffmpeg([

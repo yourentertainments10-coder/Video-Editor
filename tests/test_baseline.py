@@ -29,7 +29,8 @@ def test_baseline_deterministic_with_fixed_seed():
     mm, footage_maps = _simple_inputs()
     tl_a = cut_baseline(mm, "music.mp3", footage_maps, "energetic", duration_s=6.0, seed=42)
     tl_b = cut_baseline(mm, "music.mp3", footage_maps, "energetic", duration_s=6.0, seed=42)
-    assert tl_a == tl_b
+    ignore = {"provenance": {"created_at"}}
+    assert tl_a.model_dump(exclude=ignore) == tl_b.model_dump(exclude=ignore)
 
 
 def test_baseline_produces_a_valid_timeline():

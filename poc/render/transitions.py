@@ -26,6 +26,7 @@ class Segment:
     path: Path
     src_in_ms: int
     src_out_ms: int
+    vfilter: str = ""
 
 
 @dataclass(frozen=True)
@@ -127,7 +128,8 @@ def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int,
         graph.append(
             f"[{index}:v]trim=start={_seconds(trim_start)}:"
             f"end={_seconds(trim_end)},setpts=PTS-STARTPTS,{norm}"
-            f"[norm{index}];{fit};[fit{index}]fps={fps},format=yuv420p,"
+            f"[norm{index}];{fit};[fit{index}]fps={fps},"
+            f"{segment.vfilter + ',' if segment.vfilter else ''}format=yuv420p,"
             f"setsar=1,settb=1/{fps},tpad=stop_mode=clone:stop_duration=1,"
             f"trim=end_frame={clip_frames}[v{index}]"
         )

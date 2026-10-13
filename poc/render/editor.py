@@ -20,6 +20,7 @@ from poc.render._process import run_ffmpeg_atomic, run_process
 from poc.render.aspect import fit_to_frame_to_file
 from poc.render.audio import loudness_normalize, render_audio_track
 from poc.render.export import VerifyReport, _measure_input_i, verify_render
+from poc.render.effects import build_effect_filters
 from poc.render.text import TextOverlay, burn_text_to_file
 from poc.render.transitions import Join, Segment, render_sequence_to_file
 from poc.timeline import (
@@ -54,6 +55,7 @@ class VideoSegment:
     duration_frames: int
     transition_in: str
     transition_frames: int
+    vfilter: str = ""
 
 
 @dataclass(frozen=True)
@@ -284,6 +286,34 @@ class EditorRenderer:
 
         visual_segments: list[VideoSegment] = []
         clip_order: list[str] = []
+        filters_by_clip: dict[str, str] = {}
+        for clip, start, end in visual_frame_ranges:
+            if not clip.effects:
+                continue
+            try:
+                filters_by_clip[clip.clip_id] = build_effect_filters(
+                    clip.effects, width=settings.width, height=settings.height, fps=fps,
+                    left_handle_frames=(
+                        round(clip.transition.duration_ticks * fps / (2 * tps))
+                        if clip.transition is not None else 0
+                    ),
+                    clip_frames=end-start,
+                )
+            except ValueError as exc:
+                if str(exc) == "zoom below 1.0 is not supported":
+                    for effect in clip.effects:
+                        if effect.effect_id not in {"zoom_in", "zoom_out"}:
+                            continue
+                        params = effect.parameters.model_dump()
+                        for param in ("from_scale", "to_scale"):
+                            value = params.get(param)
+                            if value is not None and value < 1.0:
+                                raise EditorRenderError(
+                                    f"effect '{effect.effect_id}' with {param}={value} is not renderable"
+                                ) from exc
+                raise EditorRenderError(
+                    f"effect '{clip.effects[0].effect_id}' is not renderable: {exc}"
+                ) from exc
         cursor = 0
         for clip, start, end in visual_frame_ranges:
             if start > cursor:
@@ -308,6 +338,7 @@ class EditorRenderer:
                 source_out_ms=source_out if asset.kind == "video" else None,
                 start_frame=start, duration_frames=end-start,
                 transition_in=transition_id, transition_frames=transition_frames,
+                vfilter=filters_by_clip.get(clip.clip_id, ""),
             ))
             clip_order.append(clip.clip_id)
             cursor = end
@@ -516,7 +547,7 @@ class EditorRenderer:
                         source_in = int(item.source_in_ms or 0)
                     source_out = source_in + base_ms
                     actual_segments.append(Segment(path=path, src_in_ms=source_in,
-                                                   src_out_ms=source_out))
+                                                   src_out_ms=source_out, vfilter=item.vfilter))
                     placement = placement_by_clip.get(item.clip_id)
                     audio_options.append({
                         "muted": item.kind != "video" or placement is None or placement.muted,
