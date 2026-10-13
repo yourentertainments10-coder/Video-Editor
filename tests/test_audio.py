@@ -83,3 +83,16 @@ def test_sequence_with_audio_stays_in_sync(tmp_path):
         v, a = c.streams.video[0], c.streams.audio[0]
         vd, ad = float(v.duration * v.time_base), float(a.duration * a.time_base)
     assert abs(vd - ad) < 0.05
+
+def test_fade_black_audio_keeps_length_and_dips_to_silence(tmp_path):
+    x = _wav(render_audio_track(_segs(), [Join("fade_black", 500), Join("cut", 0)], tmp_path/"f.wav"))
+    assert abs(len(x) - 6 * SR) <= SR // 1000
+    c = 2 * SR
+    assert np.abs(x[c-240: c+240]).max() < 0.1 * np.abs(x[int(1.0*SR): int(1.2*SR)]).max()
+
+def test_audio_length_is_frame_quantised_like_video(tmp_path):
+    segs = [Segment(path=FIX/"tone_a.mp4", src_in_ms=1000, src_out_ms=2990),
+            Segment(path=FIX/"tone_b.mp4", src_in_ms=1005, src_out_ms=3000)]
+    x = _wav(render_audio_track(segs, [Join("cut", 0)], tmp_path/"q.wav", fps=30))
+    # 1990 ms -> 60 frames, 1995 ms -> 60 frames => 4.000 s, not 3.985 s
+    assert abs(len(x) - 4 * SR) <= SR // 1000

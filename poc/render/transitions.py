@@ -164,7 +164,10 @@ def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int) 
             )
         current = out_label
         elapsed_frames += base_frames[index + 1]
-    graph.append(f"[{current}]null[outv]")
+    graph.append(
+        f"[{current}]setparams=range=limited:color_primaries=bt709:"
+        "color_trc=bt709:colorspace=bt709[outv]"
+    )
     return ";".join(graph)
 
 
@@ -177,6 +180,9 @@ def render_sequence_to_file(
     height: int = 1080,
     fps: int = 30,
     audio_path: Path | None = None,
+    crf: int = 23,
+    preset: str = "medium",
+    audio_bitrate: str = "192k",
 ) -> Path:
     """Render a deterministic silent H.264 sequence with atomic replacement."""
     graph = build_sequence_graph(segments, joins, width=width, height=height, fps=fps)
@@ -191,13 +197,13 @@ def render_sequence_to_file(
     if audio_path is not None:
         cmd.extend(["-i", str(audio_path)])
     audio_args = ["-an"] if audio_path is None else [
-        "-map", f"{len(segments)}:a:0", "-c:a", "aac", "-b:a", "192k",
+        "-map", f"{len(segments)}:a:0", "-c:a", "aac", "-b:a", audio_bitrate,
         "-ar", "48000", "-ac", "2",
     ]
     cmd.extend([
         "-filter_complex", graph, "-map", "[outv]", *audio_args,
         "-frames:v", str(total_frames), "-r", str(fps),
-        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
         "-colorspace", "bt709", "-color_primaries", "bt709",
         "-color_trc", "bt709", "-color_range", "tv",
         "-movflags", "+faststart", str(partial),

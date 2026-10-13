@@ -58,7 +58,6 @@ def render_audio_track(
     if cut_fade_ms < 0:
         raise ValueError("cut_fade_ms must be nonnegative")
     media, base_frames, join_frames = _validate(segments, joins, 2, 2, fps)
-    del base_frames
     input_has_audio = [_probe_audio(Path(segment.path)) for segment in segments]
     cmd = [FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:]]
     for index, segment in enumerate(segments):
@@ -81,18 +80,17 @@ def render_audio_track(
         left_frames = join_frames[i - 1] // 2 if i > 0 else 0
         right_frames = join_frames[i] // 2 if i < len(joins) else 0
         start_ms = segment.src_in_ms - left_frames * 1000 / fps
-        end_ms = segment.src_out_ms + right_frames * 1000 / fps
+        clip_frames = left_frames + base_frames[i] + right_frames
         label = f"a{i}"
         filters = [
-            f"atrim=start={_seconds(start_ms / 1000)}:end={_seconds(end_ms / 1000)}",
+            f"atrim=start={_seconds(start_ms / 1000)}:duration={_seconds(clip_frames / fps)}",
             "asetpts=PTS-STARTPTS", f"aresample={sample_rate}",
             "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo",
         ]
         if i > 0 and joins[i - 1].kind == "cut" and cut_fade_ms:
             filters.append(f"afade=t=in:st=0:d={_seconds(cut_fade_ms / 1000)}")
         if i < len(joins) and joins[i].kind == "cut" and cut_fade_ms:
-            duration = max(0, end_ms - start_ms)
-            fade_start = max(0, duration / 1000 - cut_fade_ms / 1000)
+            fade_start = max(0, clip_frames / fps - cut_fade_ms / 1000)
             filters.append(f"afade=t=out:st={_seconds(fade_start)}:d={_seconds(cut_fade_ms / 1000)}")
         graph.append(f"[{source_audio_indices[i]}:a:0]{','.join(filters)}[{label}]")
 
@@ -104,11 +102,15 @@ def render_audio_track(
         else:
             duration = join_frames[i] / fps
             if join.kind == "fade_black":
-                half = join_frames[i] // 2 / fps
+                half_frames = join_frames[i] // 2
+                half = half_frames / fps
+                elapsed = sum(base_frames[:i + 1]) / fps
                 # Fade to silence at the cut, then bring the incoming clip up.
                 graph.append(
-                    f"[{current}]afade=t=out:st=duration-{_seconds(half)}:d={_seconds(half)}[afout{i}];"
-                    f"[{nxt}]afade=t=in:st=0:d={_seconds(half)}[afin{i}];"
+                    f"[{current}]atrim=duration={_seconds(elapsed)},asetpts=PTS-STARTPTS,"
+                    f"afade=t=out:st={_seconds(elapsed-half)}:d={_seconds(half)}[afout{i}];"
+                    f"[{nxt}]atrim=start={_seconds(half)},asetpts=PTS-STARTPTS,"
+                    f"afade=t=in:st=0:d={_seconds(half)}[afin{i}];"
                     f"[afout{i}][afin{i}]concat=n=2:v=0:a=1[{out}]"
                 )
             else:
@@ -117,7 +119,7 @@ def render_audio_track(
                 )
         current = out
 
-    graph.append(f"[{current}]atrim=duration={_seconds(sum(s.src_out_ms-s.src_in_ms for s in segments)/1000)},"
+    graph.append(f"[{current}]atrim=duration={_seconds(sum(base_frames)/fps)},"
                  "asetpts=PTS-STARTPTS[outa]")
     cmd.extend([
         "-filter_complex", ";".join(graph), "-map", "[outa]",
