@@ -176,6 +176,7 @@ def render_sequence_to_file(
     width: int = 1920,
     height: int = 1080,
     fps: int = 30,
+    audio_path: Path | None = None,
 ) -> Path:
     """Render a deterministic silent H.264 sequence with atomic replacement."""
     graph = build_sequence_graph(segments, joins, width=width, height=height, fps=fps)
@@ -187,8 +188,14 @@ def render_sequence_to_file(
     cmd = [FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:]]
     for segment in segments:
         cmd.extend(["-i", str(segment.path)])
+    if audio_path is not None:
+        cmd.extend(["-i", str(audio_path)])
+    audio_args = ["-an"] if audio_path is None else [
+        "-map", f"{len(segments)}:a:0", "-c:a", "aac", "-b:a", "192k",
+        "-ar", "48000", "-ac", "2",
+    ]
     cmd.extend([
-        "-filter_complex", graph, "-map", "[outv]", "-an",
+        "-filter_complex", graph, "-map", "[outv]", *audio_args,
         "-frames:v", str(total_frames), "-r", str(fps),
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-colorspace", "bt709", "-color_primaries", "bt709",

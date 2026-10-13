@@ -178,7 +178,8 @@ def test_transition_duration_is_limited_by_both_adjacent_clips():
 
 
 def test_catalogue_exposes_renderability_and_behavior_contracts():
-    assert all(item.renderable is False for item in TRANSITION_CATALOGUE)
+    RENDERABLE_NOW = {"cut", "fade", "dip_to_black", "wipe_left"}
+    assert {i.transition_id for i in TRANSITION_CATALOGUE if i.renderable} == RENDERABLE_NOW
     assert all(item.deterministic for item in TRANSITION_CATALOGUE)
     assert get_transition_metadata("cut").name == "Cut"
     assert all(item.behavior_contract for item in TRANSITION_CATALOGUE)

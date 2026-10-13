@@ -15,6 +15,7 @@ Creates real media files matching RENDER_SPEC §2 requirements:
 
 import subprocess
 import sys
+import struct
 from pathlib import Path
 import imageio_ffmpeg
 
@@ -156,12 +157,29 @@ def main():
         img.save(fixtures_dir / "exif_rot6.jpg", exif=exif, quality=95)
     except ImportError:
         result = subprocess.run(
-            ["python", "-c", exif_fixture_code, str(fixtures_dir / "exif_rot6.jpg")],
+            [sys.executable, "-c", exif_fixture_code, str(fixtures_dir / "exif_rot6.jpg")],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
-            FAILED_FIXTURES.append("EXIF orientation JPEG")
-            print(f"  ERROR generating EXIF orientation JPEG: {result.stderr}")
+            try:
+                import cv2
+                import numpy as np
+                image = np.zeros((480, 640, 3), dtype=np.uint8)
+                image[:, :320] = (0, 0, 255)
+                image[:, 320:] = (255, 0, 0)
+                ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                if not ok:
+                    raise RuntimeError("OpenCV could not encode JPEG")
+                tiff = (b"II" + struct.pack("<HI", 42, 8) + struct.pack("<H", 1)
+                        + struct.pack("<HHI", 0x0112, 3, 1) + struct.pack("<H", 6)
+                        + b"\0\0" + struct.pack("<I", 0))
+                exif = b"Exif\0\0" + tiff
+                app1 = b"\xff\xe1" + struct.pack(">H", len(exif) + 2) + exif
+                jpeg = bytes(encoded)
+                (fixtures_dir / "exif_rot6.jpg").write_bytes(jpeg[:2] + app1 + jpeg[2:])
+            except Exception as exc:
+                FAILED_FIXTURES.append("EXIF orientation JPEG")
+                print(f"  ERROR generating EXIF orientation JPEG: {result.stderr}; {exc}")
     except Exception as exc:
         FAILED_FIXTURES.append("EXIF orientation JPEG")
         print(f"  ERROR generating EXIF orientation JPEG: {exc}")
@@ -241,6 +259,26 @@ def main():
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
             str(fixtures_dir / f"solid_{color}.mp4"),
         ], f"solid {color} transition fixture")
+
+    # 15. Audio fixtures for sequence audio and mixing tests.
+    for name, color, frequency in (("tone_a", "red", 440), ("tone_b", "green", 880)):
+        run_ffmpeg([
+            "-f", "lavfi", "-i", f"color=c={color}:s=640x360:r=30:d=4",
+            "-f", "lavfi", "-i", f"sine=frequency={frequency}:sample_rate=48000:duration=4",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+            "-shortest", str(fixtures_dir / f"{name}.mp4"),
+        ], f"{name} audio transition fixture")
+
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000:duration=8",
+        "-af", "volume=0.3", "-ac", "2", "-c:a", "pcm_s16le",
+        str(fixtures_dir / "music_bed.wav"),
+    ], "music bed")
+    run_ffmpeg([
+        "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:duration=6",
+        "-af", "volume='if(between(t,2,4),0.5,0)':eval=frame", "-ac", "2",
+        "-c:a", "pcm_s16le", str(fixtures_dir / "voice.wav"),
+    ], "voice with silent intervals")
 
     print(f"\nDone! Fixtures created in {fixtures_dir}")
     for f in fixtures_dir.rglob("*"):
