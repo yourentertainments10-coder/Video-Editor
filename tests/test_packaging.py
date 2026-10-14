@@ -111,8 +111,8 @@ def test_running_url_only_trusts_loopback(tmp_path):
 def test_self_check_reports_every_part(tmp_path):
     report = launcher.self_check(tmp_path / "data")
     checks = report["checks"]
-    assert set(checks) == {"ui", "fonts", "ffmpeg", "data_dir", "libraries", "director"}
-    for name in ("fonts", "ffmpeg", "data_dir", "libraries", "director"):
+    assert set(checks) == {"ui", "fonts", "ffmpeg", "data_dir", "libraries", "director", "footage"}
+    for name in ("fonts", "ffmpeg", "data_dir", "libraries", "director", "footage"):
         assert checks[name]["ok"] is True, checks[name]
     assert checks["ui"]["ok"] is (ROOT / "ui" / "dist" / "index.html").is_file()
     assert report["ok"] is all(item["ok"] for item in checks.values())
@@ -148,6 +148,7 @@ def test_pyinstaller_spec_bundles_ui_fonts_and_ffmpeg():
     assert '"ui/dist"' in spec and '"assets/fonts"' in spec
     assert 'collect_data_files("imageio_ffmpeg"' in spec
     assert '"poc" / "director" / "lexicon.json"' in spec
+    assert 'collect_data_files("cv2", subdir="data")' in spec
     assert "console=False" in spec
     assert (ROOT / "packaging" / "entry.py").is_file()
     assert (ROOT / "packaging" / "app.ico").is_file()

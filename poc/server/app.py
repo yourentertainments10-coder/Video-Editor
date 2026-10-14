@@ -21,7 +21,9 @@ from pydantic import ValidationError
 
 from poc.director import AssetRef, parse_brief, selected_video_ids
 from poc.director.apply import apply_style
+from poc.director.footage import Footage, clip_tags, replace_sources, summarise_footage
 from poc.director.revise import apply_operations, parse_instructions
+from poc.perceive.shots import TAG_LABELS, ShotMap, analyze_shots
 from poc.director.brief import MAX_TITLE_CHARS
 from poc.resources import ui_dist_dir
 from poc.decide import CutterError, GridError, cut
@@ -58,7 +60,7 @@ def _project_root(data_dir: Path, project_id: str) -> Path:
 # for a newer server can tell the user to restart an old one (instead of failing with 404).
 CHAT_LIMIT = 300                 # messages kept per project
 CHAT_MAX_BYTES = 2 * 1024 * 1024
-API_LEVEL = 4   # 1: U1-U4, 2: Local Director briefs (LD-1), 3: revisions (LD-2), 4: chat history
+API_LEVEL = 5   # 1: U1-U4, 2: Local Director briefs (LD-1), 3: revisions (LD-2), 4: chat history, 5: footage
 
 
 def _library(root: Path) -> ProjectAssetLibrary:
@@ -137,6 +139,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             yield
         finally:
             application.state.executor.shutdown(wait=True, cancel_futures=True)
+            application.state.footage_executor.shutdown(wait=True, cancel_futures=True)
 
     app = FastAPI(title="Offline Video Editor", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.data_dir = data_dir
@@ -146,6 +149,46 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
     app.state.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="editor-render")
     app.state.asset_probe_cache = {}
     app.state.asset_probe_lock = threading.Lock()
+    app.state.footage: dict[str, tuple[str, Any]] = {}     # content hash -> ("pending"|"ready"|"failed", data)
+    app.state.footage_lock = threading.Lock()
+    app.state.footage_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="editor-footage")
+
+    def look_at_footage(library: ProjectAssetLibrary) -> tuple[Footage, int, dict[str, dict[str, Any]]]:
+        """What each video of a project shows (poc.perceive.shots). Files not looked at yet are
+        queued in the background; returns (ready footage, files still pending, status per asset)."""
+        ready: Footage = {}
+        pending = 0
+        status: dict[str, dict[str, Any]] = {}
+        for item in library.project.assets:
+            if item.kind != "video":
+                continue
+            key = item.content_hash
+            with app.state.footage_lock:
+                state = app.state.footage.get(key)
+                if state is None:
+                    state = ("pending", None)
+                    app.state.footage[key] = state
+                    app.state.footage_executor.submit(_watch, key, Path(item.source_path))
+            if state[0] == "ready":
+                ready[item.asset_id] = (item.media_asset, state[1])
+                status[item.asset_id] = {"status": "ready", "labels": summarise_footage(state[1]),
+                                         "faces": state[1].faces_measured}
+            elif state[0] == "failed":
+                status[item.asset_id] = {"status": "failed", "error": state[1]}
+            else:
+                pending += 1
+                status[item.asset_id] = {"status": "pending"}
+        return ready, pending, status
+
+    def _watch(key: str, source: Path) -> None:
+        try:
+            shots: ShotMap = analyze_shots(source, cache_dir=data_dir / "analysis-cache", content_hash=key)
+            state = ("ready", shots)
+        except Exception as exc:  # noqa: BLE001 - shown to the user as "could not look at this file"
+            state = ("failed", f"{type(exc).__name__}: {exc}"[:300])
+        with app.state.footage_lock:
+            app.state.footage[key] = state
+
     app.state.media_paths: dict[tuple, tuple] = {}
     app.state.media_paths_lock = threading.Lock()
 
@@ -278,6 +321,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             library.project = original
             library.save()
             raise HTTPException(422, str(exc)) from exc
+        look_at_footage(library)                      # start looking at new videos right away
         return {"assets": [_asset_info(item, app.state.asset_probe_cache, app.state.asset_probe_lock) for item in library.project.assets]}
 
     @app.get("/api/projects/{pid}/assets")
@@ -392,6 +436,13 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         payload["video_asset_ids"] = selected_video_ids(result.brief, refs)
         return payload
 
+    @app.get("/api/projects/{pid}/footage")
+    def footage_status(pid: str):
+        """What the Director has seen in each video (faces, shot size, light, shake); starts
+        looking at files it has not seen yet."""
+        _, pending, status = look_at_footage(_library(_project_root(data_dir, pid)))
+        return {"assets": status, "pending": pending}
+
     @app.get("/api/projects/{pid}/chat")
     def get_chat(pid: str):
         """The Director conversation of a project (kept beside project.json)."""
@@ -428,13 +479,14 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             current = EditorTimeline.model_validate(body.get("timeline"))
         except ValidationError as exc:
             raise HTTPException(422, f"invalid timeline: {exc.errors()[:1]}") from exc
-        result = parse_instructions(text, current)
+        footage, pending, _ = look_at_footage(_library(_project_root(data_dir, pid)))
+        result = parse_instructions(text, current, footage, pending)
         payload = result.model_dump(exclude={"operations"})
         payload["operations"] = [op.model_dump(exclude_none=True) for op in result.operations]
         payload["notes"], payload["timeline"] = [], None
         if result.operations:
             try:
-                proposed, notes = apply_operations(current, result.operations)
+                proposed, notes = apply_operations(current, result.operations, footage)
                 EditorRenderer().compile(proposed, _library(_project_root(data_dir, pid)))
             except (ValueError, EditorRenderError) as exc:
                 payload["questions"].append(f"Can't do that: {exc}")
@@ -471,6 +523,12 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         if title is not None and (not isinstance(title, str) or not title.strip() or len(title) > MAX_TITLE_CHARS):
             raise HTTPException(422, f"title must be 1-{MAX_TITLE_CHARS} characters")
         title = title.strip() if title else None
+        shots = body.get("shots") or {}
+        if not isinstance(shots, dict):
+            raise HTTPException(422, "shots must be {prefer: [...], avoid: [...]}")
+        prefer_tags, avoid_tags = shots.get("prefer") or [], shots.get("avoid") or []
+        if not all(isinstance(t, str) and t in TAG_LABELS for t in [*prefer_tags, *avoid_tags]):
+            raise HTTPException(422, f"shot tags must be among: {', '.join(TAG_LABELS)}")
         if video_asset_ids is not None and (
             not isinstance(video_asset_ids, list)
             or not all(isinstance(asset_id, str) for asset_id in video_asset_ids)
@@ -561,6 +619,27 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
                 )
                 editor_timeline = apply_style(editor_timeline, transition_policy=transition_policy,
                                               title=title)
+                if prefer_tags or avoid_tags:
+                    update("running", 0.75, "Looking at your footage")
+                    footage: Footage = {}
+                    for asset in video_assets:
+                        footage[asset.asset_id] = (asset.media_asset, analyze_shots(
+                            Path(asset.source_path), cache_dir=data_dir / "analysis-cache",
+                            content_hash=asset.content_hash))
+                        if record["cancel"].is_set():
+                            update("cancelled", 0.8, "Cancelled")
+                            return
+                    targets = []
+                    for clip in (c for c in editor_timeline.clips if c.track_id == "video"):
+                        tags = clip_tags(clip, footage)
+                        if tags is not None and (not all(tags.has(t) for t in prefer_tags)
+                                                 or any(tags.has(t) for t in avoid_tags)):
+                            targets.append(clip.clip_id)
+                    if targets:
+                        editor_timeline, _, _ = replace_sources(editor_timeline, targets, list(prefer_tags),
+                                                                list(avoid_tags), footage)
+                        # fades depend on the footage around each cut: work them out again
+                        editor_timeline = apply_style(editor_timeline, transition_policy=transition_policy)
                 with app.state.timeline_lock:
                     latest = EditorTimeline.load(root / "timeline.json")
                     if latest.revision != base_revision:

@@ -5,6 +5,8 @@ import { applyBrief, BriefResponse, TransitionPolicy } from './brief';
 export type AutoEditRequest = {
   musicAssetId: string; mood: 'energetic' | 'calm'; durationS: number; videoAssetIds: string[];
   transitionPolicy: TransitionPolicy; title: string | null;
+  /** footage the edit should prefer / leave out (tags from the Director, e.g. 'close-up', 'dark') */
+  shots?: { prefer: string[]; avoid: string[] };
 };
 
 type Props = {
@@ -36,6 +38,7 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
   const [briefNotes, setBriefNotes] = useState<string[]>([]);
   const [briefQuestions, setBriefQuestions] = useState<string[]>([]);
   const [readingBrief, setReadingBrief] = useState(false);
+  const [shots, setShots] = useState<{ prefer: string[]; avoid: string[] } | null>(null);
 
   const readBrief = async () => {
     if (!briefText.trim()) return;
@@ -46,6 +49,8 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
       setMood(out.form.mood); setDurationS(out.form.durationS); setSelectedVideos(new Set(out.form.videoIds));
       setTransitionPolicy(out.form.transitionPolicy); setTitle(out.form.title);
       if (out.profile) onProfile(out.profile);
+      const prefer = response.brief.prefer_tags ?? [], avoid = response.brief.avoid_tags ?? [];
+      setShots(prefer.length || avoid.length ? { prefer, avoid } : null);
       setBriefNotes(out.notes); setBriefQuestions(out.questions);
     } catch (e) {
       setBriefNotes([]); setBriefQuestions([e instanceof Error ? e.message : String(e)]);
@@ -53,6 +58,7 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
   };
   const request = (): AutoEditRequest => ({
     musicAssetId, mood, durationS, videoAssetIds: [...selectedVideos], transitionPolicy, title: title.trim() || null,
+    ...(shots ? { shots } : {}),
   });
 
   return <div className="modal-backdrop" role="presentation">

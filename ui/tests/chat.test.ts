@@ -37,7 +37,7 @@ describe('brief card', () => {
     const m = briefReply(brief(), assets);
     expect(m.kind).toBe('brief');
     expect(m.brief).toEqual({ musicAssetId: 'song', mood: 'energetic', durationS: 20, videoAssetIds: ['v1', 'v2'],
-      transitionPolicy: 'soft', title: 'Goa', profile: 'reels_9x16' });
+      transitionPolicy: 'soft', title: 'Goa', profile: 'reels_9x16', preferTags: [], avoidTags: [] });
     expect(m.lines).toEqual([]);                      // understood items are the settings table
     expect(briefReady(m.brief!)).toBe(true);
     expect(briefRequest(m.brief!)).toEqual({ musicAssetId: 'song', mood: 'energetic', durationS: 20,
@@ -103,7 +103,7 @@ describe('clipLinks', () => {
 describe('suggestions and greeting', () => {
   it('starts with briefs, then offers changes', () => {
     expect(suggestions(tl(0), assets)[0]).toMatch(/reel/);
-    expect(suggestions(tl(4), assets)).toContain('Remove clip 3');
+    expect(suggestions(tl(4), assets)).toContain('Which clips are close-ups?');
     expect(suggestions(tl(4), [asset('v1', 'video')])).toEqual([]);
   });
   it('tells a new user what to do first', () => {
@@ -113,5 +113,14 @@ describe('suggestions and greeting', () => {
   });
   it('summarises a finished edit', () => {
     expect(editReadyLine(tl(3))).toMatch(/^Your edit is ready: 3 clips, 3\.0 s\./);
+  });
+});
+
+describe('shot preferences', () => {
+  it('a brief that names footage sends it with the auto-edit', () => {
+    const m = briefReply(brief({ brief: { prefer_tags: ['close-up'], avoid_tags: ['dark'] } }), assets);
+    expect(m.brief).toMatchObject({ preferTags: ['close-up'], avoidTags: ['dark'] });
+    expect(briefRequest(m.brief!).shots).toEqual({ prefer: ['close-up'], avoid: ['dark'] });
+    expect(briefRequest(briefReply(brief(), assets).brief!).shots).toBeUndefined();
   });
 });

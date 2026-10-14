@@ -206,3 +206,59 @@ def test_revise_answers_questions_and_refuses_impossible_changes(client):
 def test_revise_validates(client, bad):
     pid, _ = _project(client)
     assert client.post(f"/api/projects/{pid}/revise", json=bad).status_code == 422
+
+
+# ---------------------------------------------------------------- Phase 2: footage
+
+from poc.perceive.shots import describe, faces_available  # noqa: E402
+from tests import shot_fixtures as fx  # noqa: E402
+
+
+def _wait_footage(c, pid):
+    end = time.time() + 120
+    while time.time() < end:
+        body = c.get(f"/api/projects/{pid}/footage").json()
+        if body["pending"] == 0:
+            return body
+        time.sleep(0.2)
+    raise AssertionError("footage was not looked at in time")
+
+
+@pytest.mark.skipif(not faces_available(), reason="needs OpenCV 4.x (Haar face cascades)")
+def test_footage_is_watched_after_import_and_used_by_the_director(client, tmp_path):
+    tour = fx.tour(tmp_path / "media" / "tour.mp4")
+    pid = client.post("/api/projects", json={"name": "Footage"}).json()["project_id"]
+    assets = client.post(f"/api/projects/{pid}/assets", json={"paths": [str(tour), str(MUSIC)]}).json()["assets"]
+    video = next(a for a in assets if a["kind"] == "video")
+    body = _wait_footage(client, pid)
+    entry = body["assets"][video["asset_id"]]
+    assert entry["status"] == "ready" and entry["faces"] is True and entry["labels"]
+    assert set(body["assets"]) == {video["asset_id"]}                 # music is not looked at
+
+    # auto-edit that prefers close-ups: every clip it can swap shows the close-up part
+    rev = client.get(f"/api/projects/{pid}/timeline").json()["revision"]
+    job = client.post(f"/api/projects/{pid}/auto-edit", json={
+        "base_revision": rev, "music_asset_id": next(a for a in assets if a["kind"] != "video")["asset_id"],
+        "mood": "energetic", "duration_s": 3, "shots": {"prefer": ["close-up"]}}).json()
+    assert _wait(client, job["job_id"])["status"] == "done"
+    tl = client.get(f"/api/projects/{pid}/timeline").json()["timeline"]
+    clips = [c for c in tl["clips"] if c["track_id"] == "video"]
+    close = [c for c in clips if 3500 <= c["source_in_ms"] and c["source_out_ms"] <= 8500]
+    assert close, clips                                               # the close-up is 4..8 s of the file
+
+    # the Director answers from the footage, and changes it on request
+    r = client.post(f"/api/projects/{pid}/revise", json={"text": "which clips are close-ups?", "timeline": tl}).json()
+    assert r["answer"] and "close-up" in r["answer"]
+    r = client.post(f"/api/projects/{pid}/revise", json={"text": "no close-ups", "timeline": tl}).json()
+    assert r["timeline"] and r["operations"][0]["op"] == "replace_source", r
+
+
+def test_footage_endpoint_and_shot_validation(client):
+    pid, assets = _project(client)
+    body = _wait_footage(client, pid)
+    assert set(body["assets"]) == {a["asset_id"] for a in assets.values() if a["kind"] == "video"}
+    rev = client.get(f"/api/projects/{pid}/timeline").json()["revision"]
+    music = next(a for a in assets.values() if a["kind"] != "video")["asset_id"]
+    r = client.post(f"/api/projects/{pid}/auto-edit", json={"base_revision": rev, "music_asset_id": music,
+                    "mood": "calm", "duration_s": 3, "shots": {"prefer": ["sunsets"]}})
+    assert r.status_code == 422

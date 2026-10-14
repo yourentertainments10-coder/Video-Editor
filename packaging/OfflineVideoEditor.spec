@@ -18,6 +18,7 @@ datas = [
 ]
 datas += collect_data_files("imageio_ffmpeg", include_py_files=False)  # bundled ffmpeg binary
 datas += collect_data_files("librosa")
+datas += collect_data_files("cv2", subdir="data")          # Haar face cascades (footage understanding)
 
 hiddenimports = (
     collect_submodules("poc")

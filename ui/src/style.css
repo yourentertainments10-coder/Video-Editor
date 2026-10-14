@@ -107,6 +107,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .brief-settings dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brief-settings select { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--field); padding: 3px 6px; font-size: 12px; }
 .cap { text-transform: capitalize; }
+.cap-first::first-letter { text-transform: uppercase; }
+.media-card > small.seen { margin-top: 5px; color: var(--accent-text); white-space: normal; line-height: 1.35; font-size: 9.5px; }
 .job-card p { margin: 0; }
 .job-card.done { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
 
@@ -277,7 +279,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--line-soft); padding: 10px 14px; flex-direction: row; align-items: center; gap: 10px; }
   .sidebar h2, .sidebar .eyebrow, .sidebar-note { display: none; }
   .create-row { margin: 0; flex: 0 0 210px; }
-  .sidebar nav { grid-auto-flow: column; grid-auto-columns: max-content; overflow-x: auto; min-width: 0; }
+  .sidebar nav { grid-auto-flow: column; grid-auto-columns: max-content; overflow-x: auto; min-width: 0; scrollbar-width: none; }
+  .sidebar nav::-webkit-scrollbar { display: none; }
+  .sidebar { height: 54px; }
   .studio { min-height: calc(100vh - 110px); }
   .chat-panel { height: calc(100vh - 110px); }
 }

@@ -20,10 +20,12 @@ from pydantic import BaseModel, Field
 
 from poc.director.apply import TITLE_ASSET_ID, TITLE_CLIP_ID, TITLE_MS, apply_style
 from poc.director.brief import MAX_TITLE_CHARS, _normalise, _words_to_numbers
+from poc.director.footage import Footage, clip_tags, replace_sources, tags_in, tags_sentence
+from poc.perceive.shots import NEEDS_FACES, TAG_LABELS, TAG_SINGULAR
 from poc.timeline import EditorClip, EditorTimeline, EffectRef, MediaAsset, TransitionRef
 
 Intent = Literal["remove", "trim", "length", "transition", "look", "motion", "title", "undo", "redo",
-                 "explain", "retime", "unsupported", "unknown", "multiple"]
+                 "explain", "retime", "unsupported", "unknown", "multiple", "footage", "describe"]
 
 MIN_CLIP_MS = 200
 FADE_MS = 400
@@ -43,7 +45,7 @@ class Operation(BaseModel):
     """One change. ``op`` decides which fields are used."""
 
     op: Literal["remove_clips", "trim_clip", "cut_range", "set_length", "set_transitions", "set_transition",
-                "adjust_look", "clear_look", "add_motion", "set_title", "remove_title"]
+                "adjust_look", "clear_look", "add_motion", "set_title", "remove_title", "replace_source"]
     clip_ids: list[str] = Field(default_factory=list)
     side: Literal["start", "end"] | None = None
     ms: int | None = None
@@ -53,6 +55,8 @@ class Operation(BaseModel):
     amount: float | None = None
     text: str | None = None
     at: Literal["start", "end"] | None = None
+    tags: list[str] = Field(default_factory=list)      # replace_source: footage the new shots must show
+    avoid: list[str] = Field(default_factory=list)     # replace_source: footage they must not show
 
 
 class RevisionResult(BaseModel):
@@ -230,14 +234,110 @@ def split_instructions(text: str) -> list[str]:
     return [p.strip(" ,.") for p in parts if p.strip(" ,.")]
 
 
-def parse_instructions(text: str, timeline: EditorTimeline) -> RevisionResult:
+def _numbers(indices: list[int]) -> str:
+    if len(indices) == 1:
+        return f"clip {indices[0]}"
+    return "clips " + ", ".join(str(i) for i in indices[:-1]) + f" and {indices[-1]}"
+
+
+def _footage_request(t: str, clips: list[EditorClip], refs: "_Refs", ids: list[str], footage: Footage | None,
+                     pending: int):
+    """Requests about what the footage shows. Returns (intent, ops, summary, questions, answer) or None."""
+    tags = tags_in(t)
+    describing = bool(re.search(r"\bwhat(?:'s| is| are)\b[^?]*\b(?:in|on)\b|\bwhat does\b[^?]*\bshow\b|"
+                                r"\bkya (?:hai|dikh)|\bdescribe\b|\bkaisa (?:hai|dikh)", t))
+    if not tags and not (describing and ids):
+        return None
+    footage = footage or {}
+    needed = {clips[i - 1].asset_id for i in refs.indices} if (describing and not tags) else {c.asset_id for c in clips}
+    if not footage or (pending and not needed <= set(footage)):
+        wait = (f"I'm still watching your footage ({pending} file{'s' if pending != 1 else ''} to go). "
+                "Ask again in a moment.") if pending else "I haven't looked at this footage yet. Ask again in a moment."
+        return "footage", [], [], [wait], None
+    if tags and any(tag in NEEDS_FACES for tag in tags) and not any(m.faces_measured for _, m in footage.values()):
+        return "footage", [], [], ["I can't see faces on this computer (this OpenCV has no face detector). "
+                                   "Light, shake and movement still work: try 'remove the dark clips'."], None
+
+    numbered = list(enumerate(clips, 1))
+    seen = {c.clip_id: clip_tags(c, footage) for c in clips}
+
+    def matching(wanted: list[str]) -> list[int]:
+        return [i for i, c in numbered if seen[c.clip_id] is not None and any(seen[c.clip_id].has(w) for w in wanted)]
+
+    # describe clips
+    if describing and ids and not tags:
+        lines = []
+        for i in refs.indices[:6]:
+            tg = seen[clips[i - 1].clip_id]
+            lines.append(f"Clip {i}: {tags_sentence(tg) if tg else 'not looked at yet'}.")
+        return "describe", [], [], [], " ".join(lines)
+
+    label = " and ".join(TAG_LABELS[tag] for tag in tags)
+    # which clips are ...
+    if re.search(r"\b(?:which|kaun ?se|kaunse|kon ?se|list|show me|dikhao|how many|kitne)\b", t):
+        hits = matching(tags)
+        one = " or ".join(TAG_SINGULAR[tag] for tag in tags)
+        answer = (f"{_numbers(hits)} is {one}." if len(hits) == 1 else f"{_numbers(hits)} are {label}." if hits
+                  else f"None of the {len(clips)} clips are {label}.")
+        return "describe", [], [], [], answer[0].upper() + answer[1:]
+
+    negated = bool(re.search(r"\b(?:no|not|without|avoid|bina|mat|nahi|less|kam)\s+(?:\w+\s+)?(?:" +
+                             "|".join(re.escape(w) for w in ("dark", "shaky", "bright", "busy", "still", "wide", "close",
+                                                             "faces", "people", "crowd", "medium", "group", "steady")) + ")", t))
+    removing = re.search(r"\b(?:remove|delete|drop|cut out|get rid of|hatao|hata do|nikalo|nikal do)\b", t)
+    replacing = re.search(r"\b(?:replace|swap|change|exchange|badlo|badal do|fix)\b", t)
+    keeping = re.search(r"\b(?:only|sirf|just|mostly|more|zyada|jyada|keep|use|rakho|chahiye|prefer)\b", t)
+
+    if removing and not ids:
+        hits = matching(tags)
+        if not hits:
+            return "footage", [], [], [f"None of the clips are {label}; nothing to remove."], None
+        if len(hits) == len(clips):
+            return "footage", [], [], [f"All {len(clips)} clips are {label}; removing them would leave nothing. "
+                                       f"Try 'replace the {label}' instead."], None
+        return ("footage", [Operation(op="remove_clips", clip_ids=[clips[i - 1].clip_id for i in hits])],
+                [f"Remove the {label}: {_numbers(hits)}; later clips move earlier and the video gets shorter."], [], None)
+
+    if replacing and ids:
+        after = re.split(r"\bwith\b", t, maxsplit=1)
+        wanted = tags_in(after[1]) if len(after) > 1 else []
+        avoid = [] if wanted else tags
+        if not wanted and not avoid:
+            return "footage", [], [], ["Replace it with what? e.g. 'replace clip 3 with a close-up'."], None
+        names = TAG_SINGULAR if len(ids) == 1 else TAG_LABELS
+        what = " and ".join(names[w] for w in wanted) if wanted else "footage that is not " + label
+        return ("footage", [Operation(op="replace_source", clip_ids=ids, tags=wanted, avoid=avoid)],
+                [f"Swap {_numbers(refs.indices)} for {what}; length and timing stay the same."], [], None)
+
+    if (replacing or negated) and not ids:
+        hits = matching(tags)
+        if not hits:
+            return "footage", [], [], [f"None of the clips are {label}."], None
+        return ("footage", [Operation(op="replace_source", clip_ids=[clips[i - 1].clip_id for i in hits], avoid=tags)],
+                [f"Swap the {label} ({_numbers(hits)}) for other footage; length and timing stay the same."], [], None)
+
+    if keeping:
+        targets = [i for i, c in numbered if seen[c.clip_id] is None or not all(seen[c.clip_id].has(w) for w in tags)]
+        if not targets:
+            return "footage", [], [], [], f"All {len(clips)} clips are already {label}."
+        return ("footage", [Operation(op="replace_source", clip_ids=[clips[i - 1].clip_id for i in targets], tags=tags)],
+                [f"Use {label}: swap {_numbers(targets)} for {label} from your footage; cuts stay on the beat."], [], None)
+
+    hits = matching(tags)
+    return ("footage", [], [], [f"{_numbers(hits)[0].upper() + _numbers(hits)[1:]} {'is' if len(hits) == 1 else 'are'} "
+                                f"{label}. Do you want to keep only {label}, remove them, or replace them?"
+                                if hits else f"None of the clips are {label}."], None)
+
+
+def parse_instructions(text: str, timeline: EditorTimeline, footage: Footage | None = None,
+                       pending: int = 0) -> RevisionResult:
     """One or several instructions in one sentence. Clip numbers always refer to the timeline as
     it is now (before any of the changes), like people mean them."""
     parts = split_instructions(text)
     if len(parts) <= 1:
-        return parse_revision(text, timeline)
-    results = [parse_revision(part, timeline) for part in parts]
-    single = {"undo", "redo", "explain", "retime"}
+        return parse_revision(text, timeline, footage, pending)
+    results = [parse_revision(part, timeline, footage, pending) for part in parts]
+    single = {"undo", "redo", "explain", "retime", "describe"}
     if any(r.intent in single for r in results):
         return RevisionResult(intent="unknown", questions=[
             "Ask 'undo', 'why …' or 'faster/calmer' on its own, not together with other changes."])
@@ -250,7 +350,10 @@ def parse_instructions(text: str, timeline: EditorTimeline) -> RevisionResult:
     return combined
 
 
-def parse_revision(text: str, timeline: EditorTimeline) -> RevisionResult:
+def parse_revision(text: str, timeline: EditorTimeline, footage: Footage | None = None,
+                   pending: int = 0) -> RevisionResult:
+    """``footage``: what is in each video file (poc.perceive.shots), when it has been measured;
+    ``pending``: how many files are still being looked at."""
     raw = _normalise(text or "")
     clips = video_clips(timeline)
     if not raw:
@@ -292,8 +395,18 @@ def parse_revision(text: str, timeline: EditorTimeline) -> RevisionResult:
         if clip.rationale:
             answer = _explain(refs.indices[0], name, clip)
         else:
-            answer = f"Clip {refs.indices[0]} ({name}) was placed by hand, so there is no auto-edit reason."
+            answer = (f"Clip {refs.indices[0]} ({name}) was placed by hand or by a Director change, so there is "
+                      f"no auto-edit reason.")
+        tags = clip_tags(clip, footage or {})
+        if tags is not None:
+            answer += f" It shows: {tags_sentence(tags)}."
         return result("explain", answer=answer)
+
+    # 2b. what is in the footage
+    found = _footage_request(t, clips, refs, ids, footage, pending)
+    if found is not None:
+        intent, ops, summary, questions, answer = found
+        return result(intent, ops, summary, questions=questions, answer=answer)
 
     # 3. speed changes are not renderable yet
     if re.search(r"\b(?:slow[\s-]?mo(?:tion)?|slowmo|speed up|speed it up|fast[\s-]?forward|reverse|\d(?:\.\d)?x speed|\d(?:\.\d)?x)\b", t) and ids:
@@ -552,8 +665,10 @@ def _cut_range(tl: EditorTimeline, start: int, end: int) -> EditorTimeline:
     return _fit_music_and_length(tl, out)
 
 
-def apply_operations(timeline: EditorTimeline, operations: list[Operation]) -> tuple[EditorTimeline, list[str]]:
+def apply_operations(timeline: EditorTimeline, operations: list[Operation],
+                     footage: Footage | None = None) -> tuple[EditorTimeline, list[str]]:
     """Apply operations to a copy of ``timeline``. Returns (new timeline, extra notes).
+    ``footage`` is needed only for "replace_source" (finding shots that show something).
 
     Raises ValueError for an operation that cannot be applied (e.g. a clip would become
     shorter than 200 ms); the input is never changed.
@@ -666,6 +781,16 @@ def apply_operations(timeline: EditorTimeline, operations: list[Operation]) -> t
         elif op.op == "remove_title":
             tl = tl.model_copy(update={"assets": [a for a in tl.assets if a.asset_id != TITLE_ASSET_ID],
                                        "clips": [c for c in tl.clips if c.clip_id != TITLE_CLIP_ID]})
+        elif op.op == "replace_source":
+            if not footage:
+                raise ValueError("the footage has not been looked at yet")
+            tl, replaced, missing = replace_sources(tl, op.clip_ids, op.tags, op.avoid, footage)
+            if not replaced:
+                wanted = " and ".join(TAG_LABELS[t] for t in op.tags) or "different footage"
+                raise ValueError(f"there is no unused footage with {wanted} of the right length")
+            if missing:
+                notes.append(f"Found matching footage for {replaced} of {replaced + missing} clips; "
+                             f"the other {missing} stay as they were.")
     tl, dropped = _drop_invalid_transitions(tl)
     if dropped:
         notes.append(f"Dropped {dropped} fade{'s' if dropped > 1 else ''} that no longer fit.")

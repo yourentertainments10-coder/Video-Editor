@@ -7,6 +7,7 @@ export type BriefResponse = {
     duration_s: number | null; aspect: string | null; profile: string | null; mood: Mood | null;
     transition_policy: TransitionPolicy; title: string | null;
     only_asset_ids: string[]; exclude_asset_ids: string[];
+    prefer_tags?: string[]; avoid_tags?: string[];
   };
   understood: string[]; defaults: string[]; questions: string[]; unknown_words: string[];
   video_asset_ids: string[];

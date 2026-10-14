@@ -35,6 +35,8 @@ def test_golden_brief(case):
         title=exp.get("title"),
         only_asset_ids=[BY_NAME[n] for n in exp.get("only", [])],
         exclude_asset_ids=[BY_NAME[n] for n in exp.get("exclude", [])],
+        prefer_tags=exp.get("prefer_tags", []),
+        avoid_tags=exp.get("avoid_tags", []),
     )
     assert b == expected, (result.understood, result.questions)
     assert len(result.questions) == case["questions"], result.questions

@@ -46,6 +46,8 @@ class CreativeBrief(BaseModel):
     title: str | None = None
     only_asset_ids: list[str] = Field(default_factory=list)
     exclude_asset_ids: list[str] = Field(default_factory=list)
+    prefer_tags: list[str] = Field(default_factory=list)   # footage to use ("close-up", ...; poc.perceive.shots)
+    avoid_tags: list[str] = Field(default_factory=list)    # footage to keep out ("dark", "shaky", ...)
 
 
 class BriefResult(BaseModel):
@@ -282,6 +284,22 @@ def parse_brief(text: str, assets: Sequence[AssetRef] = ()) -> BriefResult:
                                 " and ".join(_ASPECT_NAMES[a] for a in aspects) + ".")
     else:
         result.questions.append("Which format: YouTube 16:9, Reels 9:16 or Square 1:1?")
+    masked = "".join(" " if any(s <= i < e for s, e in consumed) else ch for i, ch in enumerate(masked))
+
+    # --- what the footage should (not) show: "mostly close-ups", "no dark shots"
+    from poc.director.footage import tag_spans          # here: keeps the brief parser importable alone
+    from poc.perceive.shots import TAG_LABELS
+    for start, end, tag in tag_spans(masked):
+        consumed.append((start, end))
+        negated = _preceded_by(masked, start, lex["negations"] + ["avoid", "less", "kam"], window=2) or \
+            bool(re.match(r"\s*(?:no|without|avoid)\b", masked[start:end]))
+        target = brief.avoid_tags if negated else brief.prefer_tags
+        if tag not in brief.prefer_tags and tag not in brief.avoid_tags:
+            target.append(tag)
+    if brief.prefer_tags:
+        result.understood.append("Shots: " + ", ".join(TAG_LABELS[t] for t in brief.prefer_tags))
+    if brief.avoid_tags:
+        result.understood.append("Leave out: " + ", ".join(TAG_LABELS[t] for t in brief.avoid_tags))
     masked = "".join(" " if any(s <= i < e for s, e in consumed) else ch for i, ch in enumerate(masked))
 
     # --- mood

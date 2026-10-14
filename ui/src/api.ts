@@ -20,6 +20,10 @@ export type CatalogueItem = {
   parameter_schema: CatalogueField[]; duration_default_ticks?: number;
 };
 export type EditorCatalogue = { transitions: CatalogueItem[]; effects: CatalogueItem[] };
+export type FootageStatus = {
+  assets: Record<string, { status: 'ready' | 'pending' | 'failed'; labels?: string[]; faces?: boolean; error?: string }>;
+  pending: number;
+};
 export type TimelineIssue = { code: string; message: string; clip_id?: string };
 export type SavedTimeline = { revision: number; timeline: any };
 export type SaveResult = { conflict: false; revision: number; issues: TimelineIssue[] }
@@ -30,7 +34,7 @@ export class ApiError extends Error {
 }
 
 /** Must equal API_LEVEL in poc/server/app.py (checked by tests/test_polish.py). */
-export const API_LEVEL = 4;
+export const API_LEVEL = 5;
 
 /** Turn an error response into a readable sentence (FastAPI sends {"detail": ...}). */
 export function errorMessage(status: number, body: string, statusText = ''): string {

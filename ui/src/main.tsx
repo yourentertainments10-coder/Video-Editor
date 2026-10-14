@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, apiLevelProblem, Asset, assetAudioUrl, EditorCatalogue, Job, json, Project, saveTimeline, thumbnailUrl } from './api';
+import { api, apiLevelProblem, Asset, assetAudioUrl, EditorCatalogue, FootageStatus, Job, json, Project, saveTimeline, thumbnailUrl } from './api';
 import { Inspector } from './timeline/Inspector';
 import { exportAdvice } from './exportAdvice';
 import { PreviewPlayer } from './timeline/PreviewPlayer';
@@ -53,6 +53,8 @@ function App() {
   const [autoEditError, setAutoEditError] = useState<string | null>(null);
   const [autoEditStatus, setAutoEditStatus] = useState<AutoEditStatus>(null);
   const [view, setView] = useState<'chat' | 'edit'>('chat');
+  const [footage, setFootage] = useState<FootageStatus | null>(null);
+  const [footageTick, setFootageTick] = useState(0);
   const [history, setHistory] = useState<History<Timeline> | null>(null);
   const [saveCycle, setSaveCycle] = useState(0);
   const dirty = useRef(false);
@@ -91,6 +93,20 @@ function App() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setSaveMessage(''); }
   };
   useEffect(() => { void refreshProjects().catch(e => setError(e instanceof Error ? e.message : String(e))); }, []);
+  // what the Director has seen in each video; asks again while files are still being looked at
+  useEffect(() => {
+    if (!project) { setFootage(null); return; }
+    let live = true;
+    const pid = project.project_id;
+    const timer = window.setTimeout(() => {
+      void api<FootageStatus>(`/api/projects/${pid}/footage`).then(status => {
+        if (!live) return;
+        setFootage(status);
+        if (status.pending > 0) setFootageTick(value => value + 1);
+      }).catch(() => undefined);
+    }, footageTick ? 2000 : 0);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [project?.project_id, footageTick, assets.length]);
   const [serverProblem, setServerProblem] = useState<string | null>(null);
   useEffect(() => {
     void api<{ api_level?: number }>('/api/health').then(h => setServerProblem(apiLevelProblem(h.api_level))).catch(() => undefined);
@@ -332,6 +348,7 @@ function App() {
         base_revision: revision, music_asset_id: request.musicAssetId, mood: request.mood,
         duration_s: request.durationS, video_asset_ids: request.videoAssetIds,
         transition_policy: request.transitionPolicy, ...(request.title ? { title: request.title } : {}),
+        ...(request.shots ? { shots: request.shots } : {}),
       }));
       setJob({ job_id: result.job_id, status: 'queued', progress: 0, message: 'Queued', output: null, report: null, error: null });
       setAutoEditStatus({ status: 'queued', progress: 0, message: 'Queued', error: null });
@@ -377,7 +394,7 @@ function App() {
             <button role="tab" aria-selected={view === 'chat'} className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>Director</button>
             <button role="tab" aria-selected={view === 'edit'} className={view === 'edit' ? 'active' : ''} onClick={() => setView('edit')}>Editor</button>
           </div>
-          <ChatPanel project={project} assets={assets} timeline={timeline} autoEdit={autoEditStatus}
+          <ChatPanel project={project} assets={assets} timeline={timeline} autoEdit={autoEditStatus} footage={footage}
             jobBusy={!!job && ['queued', 'running'].includes(job.status)}
             onRevise={askRevision} onBrief={readBrief} onApply={next => updateTimeline(next)} onUndo={undoEdit} onRedo={redoEdit}
             onStartAutoEdit={async (request, nextProfile) => { if (nextProfile) setProfile(nextProfile); return startAutoEdit(request); }}
@@ -390,6 +407,9 @@ function App() {
               <div className="thumb">{asset.thumbnail_count > 0 ? <img src={thumbnailUrl(project.project_id, asset.asset_id)} alt=""/> : <span>♫</span>}<b>{asset.kind.toUpperCase()}</b></div>
               <strong title={asset.file_name}>{asset.file_name}</strong><small>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : asset.kind} {asset.fps ? `· ${asset.fps.toFixed(1)} fps` : ''}</small>
               <div className="badges">{asset.hdr && <em>HDR</em>}{asset.rotation ? <em>ROTATED</em> : null}{asset.has_audio && <em>AUDIO</em>}</div>
+              {asset.kind === 'video' && footage?.assets[asset.asset_id] && <small className="seen" title="What the Director sees in this video">{
+                footage.assets[asset.asset_id].status === 'ready' ? (footage.assets[asset.asset_id].labels ?? []).join(' · ') || 'Nothing stands out'
+                  : footage.assets[asset.asset_id].status === 'pending' ? 'Watching…' : 'Could not look at this video'}</small>}
             </button>)}</div>
             {!assets.length && <div className="drop-hint"><span>＋</span><strong>Your media will appear here</strong><small>Add videos, photos, and music to get started.</small><button className="quiet" onClick={() => void addMedia()}>Browse files</button></div>}
           </div>

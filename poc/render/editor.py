@@ -128,9 +128,21 @@ def _audio_props(clip) -> AudioProperties:
     return clip.audio or AudioProperties()
 
 
+_AUDIO_FLAGS: dict[tuple[str, int, int], bool] = {}
+
+
 def _has_audio(path: Path) -> bool:
-    with av.open(str(path)) as container:
-        return bool(container.streams.audio)
+    """Whether a source has an audio stream; remembered per file version (opened once, not per clip)."""
+    stat = path.stat()
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    known = _AUDIO_FLAGS.get(key)
+    if known is None:
+        with av.open(str(path)) as container:
+            known = bool(container.streams.audio)
+        if len(_AUDIO_FLAGS) > 4096:
+            _AUDIO_FLAGS.clear()
+        _AUDIO_FLAGS[key] = known
+    return known
 
 
 def _check_transition_parameters(clip) -> None:

@@ -66,6 +66,26 @@ clear "I don't understand X; try one of: …" instead of a guess.
 - The conversation is saved per project in `chat.json` (`GET/PUT /api/projects/{pid}/chat`,
   last 300 messages). Narrow windows show Director / Editor tabs.
 
+## Implementation status (footage, phase 2a)
+
+- `poc/perceive/shots.py` looks at every video once, offline, with what ships inside OpenCV 4.x
+  (no model download): faces (frontal + profile Haar cascades, 1 Hz on a 360-px frame), shot
+  size from the biggest face (close-up >= 3.5 % of the frame, medium >= 0.6 %, else wide /
+  no faces), brightness, camera shake (jitter of the phase-correlation shift, 4 Hz) and
+  movement. Cached by file content in `analysis-cache/shots`. A 140 s phone video takes
+  roughly 5-15 s; the server looks at two files at a time in the background after import
+  (`GET /api/projects/{pid}/footage` reports progress and a few words per file).
+- Director (`poc/director/footage.py`): "which clips are dark?", "what's in clip 3?",
+  "remove the dark clips", "only close-ups" / "sirf close-ups rakho", "no shaky shots",
+  "replace clip 4 with a close-up". Swaps keep each clip's place and length (so cuts stay on
+  the beat) and never reuse footage already on the timeline. "why clip 3?" also says what the
+  clip shows.
+- Briefs: "mostly close-ups", "no dark shots", "action shots", "video without faces" ->
+  `prefer_tags` / `avoid_tags`; the auto-edit swaps clips that do not fit after cutting.
+- Limits: faces must be roughly 40 px or larger at 360 px wide (about 1/9 of the frame
+  width); tiny faces in wide crowd shots count as "no faces". OpenCV 5 moved the cascades
+  out, so the project pins `opencv-python-headless>=4.9,<5`; the self-check reports it.
+
 ## 2. Components
 
 ```

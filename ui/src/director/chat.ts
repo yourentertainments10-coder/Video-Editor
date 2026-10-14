@@ -16,7 +16,16 @@ export type JobState = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupte
 export type BriefSettings = {
   musicAssetId: string | null; mood: Mood; durationS: number; videoAssetIds: string[];
   transitionPolicy: TransitionPolicy; title: string | null; profile: string | null;
+  preferTags?: string[]; avoidTags?: string[];
 };
+
+/** Footage words the Director uses (tags from poc/perceive/shots.py). */
+export const TAG_NAMES: Record<string, string> = {
+  'close-up': 'close-ups', medium: 'medium shots', wide: 'wide shots', faces: 'shots with faces',
+  'no-faces': 'shots without faces', group: 'group shots', dark: 'dark shots', bright: 'bright shots',
+  shaky: 'shaky shots', steady: 'steady shots', busy: 'lots of movement', still: 'still shots',
+};
+export const tagNames = (tags: string[] = []) => tags.map(t => TAG_NAMES[t] ?? t).join(', ');
 
 export type ChatMessage = {
   id: string;
@@ -79,6 +88,8 @@ export function briefReply(response: BriefResponse, assets: Asset[], previous?: 
       ? previous.musicAssetId : songs[0]?.asset_id ?? null,
     mood: b.mood ?? previous?.mood ?? 'energetic',
     durationS: b.duration_s ?? previous?.durationS ?? DEFAULT_DURATION_S,
+    preferTags: b.prefer_tags?.length ? [...b.prefer_tags] : previous?.preferTags ?? [],
+    avoidTags: b.avoid_tags?.length ? [...b.avoid_tags] : previous?.avoidTags ?? [],
     videoAssetIds: response.video_asset_ids.length ? [...response.video_asset_ids] : videos.map(v => v.asset_id),
     transitionPolicy: b.transition_policy !== 'auto' ? b.transition_policy : previous?.transitionPolicy ?? 'auto',
     title: b.title ?? previous?.title ?? null,
@@ -110,6 +121,8 @@ export function briefRequest(settings: BriefSettings): AutoEditRequest {
   return {
     musicAssetId: settings.musicAssetId, mood: settings.mood, durationS: settings.durationS,
     videoAssetIds: [...settings.videoAssetIds], transitionPolicy: settings.transitionPolicy, title: settings.title,
+    ...(settings.preferTags?.length || settings.avoidTags?.length
+      ? { shots: { prefer: [...(settings.preferTags ?? [])], avoid: [...(settings.avoidTags ?? [])] } } : {}),
   };
 }
 
@@ -196,7 +209,8 @@ export function suggestions(timeline: Timeline | null, assets: Asset[]): string[
   if (!hasVideo || !hasSong) return [];
   const clips = videoClipCount(timeline);
   if (!clips) return ['Make a 30 second energetic reel', 'Calm 20 second video with soft fades', '15 second reel, title "My trip"'];
-  return clips >= 3 ? ['Add fades between clips', 'Remove clip 3', 'Why clip 2?'] : ['Add fades between clips', 'Make it black and white'];
+  return clips >= 3 ? ['Add fades between clips', 'Which clips are close-ups?', 'Remove the dark clips']
+    : ['Add fades between clips', 'Make it black and white'];
 }
 
 /** Shown when a project's conversation is empty (never saved). */

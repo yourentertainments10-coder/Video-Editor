@@ -810,8 +810,7 @@
    },
    "questions": 0,
    "unknown_words": [
-    "between",
-    "shots"
+    "between"
    ]
   },
   {
@@ -1270,6 +1269,51 @@
     "transition_policy": "soft"
    },
    "questions": 2,
+   "unknown_words": []
+  },
+  {
+   "text": "20 second reel, mostly close-ups, no dark shots",
+   "expect": {
+    "duration_s": 20.0,
+    "aspect": "9:16",
+    "prefer_tags": [
+     "close-up"
+    ],
+    "avoid_tags": [
+     "dark"
+    ],
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "energetic reel with action shots and no shaky clips",
+   "expect": {
+    "mood": "energetic",
+    "prefer_tags": [
+     "busy"
+    ],
+    "avoid_tags": [
+     "shaky"
+    ],
+    "aspect": "9:16"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30s youtube video without faces",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "16:9",
+    "avoid_tags": [],
+    "prefer_tags": [
+     "no-faces"
+    ],
+    "mood": "energetic"
+   },
+   "questions": 0,
    "unknown_words": []
   }
  ]

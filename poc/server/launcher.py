@@ -170,12 +170,19 @@ def self_check(folder: Path) -> dict:
             raise RuntimeError(f"brief parser gave {brief}")
         return "brief parser ok"
 
+    def footage():
+        from poc.perceive.shots import _cascades, faces_available
+        if not faces_available() or len(_cascades()) < 2:
+            raise RuntimeError("OpenCV has no face cascades (install opencv-python-headless>=4.9,<5)")
+        return "face detection ok"
+
     record("ui", ui)
     record("fonts", fonts)
     record("ffmpeg", ffmpeg)
     record("data_dir", data)
     record("libraries", libraries)
     record("director", director)
+    record("footage", footage)
     return {"ok": all(item["ok"] for item in results.values()), "frozen": is_frozen(),
             "checks": results}
 

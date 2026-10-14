@@ -6,8 +6,9 @@ import type { Timeline } from '../timeline/ops';
 import { clipNumbers, planRevision, RevisionResponse } from '../timeline/revise';
 import {
   briefReady, briefReply, briefRequest, BriefSettings, ChatMessage, clipLinks, directorMessage, editReadyLine,
-  forStorage, fromStorage, greeting, revisionReply, route, suggestions, userMessage,
+  forStorage, fromStorage, greeting, revisionReply, route, suggestions, tagNames, userMessage,
 } from './chat';
+import type { FootageStatus } from '../api';
 
 export type AutoEditStatus = { status: string; progress: number; message: string; error: string | null } | null;
 
@@ -16,6 +17,7 @@ type Props = {
   assets: Asset[];
   timeline: Timeline;
   autoEdit: AutoEditStatus;
+  footage?: FootageStatus | null;
   jobBusy: boolean;
   onRevise: (text: string, timeline: Timeline) => Promise<RevisionResponse>;
   onBrief: (text: string) => Promise<BriefResponse>;
@@ -195,6 +197,8 @@ export function ChatPanel(props: Props) {
           <dt>Mood</dt><dd className="cap">{settings.mood}</dd>
           <dt>Videos</dt><dd>{settings.videoAssetIds.length} of {assets.filter(a => a.kind === 'video').length}</dd>
           <dt>Transitions</dt><dd>{TRANSITION_NAMES[settings.transitionPolicy]}</dd>
+          {!!settings.preferTags?.length && <><dt>Shots</dt><dd className="cap-first">{tagNames(settings.preferTags)}</dd></>}
+          {!!settings.avoidTags?.length && <><dt>Leave out</dt><dd className="cap-first">{tagNames(settings.avoidTags)}</dd></>}
           {settings.title && <><dt>Title</dt><dd>“{settings.title}”</dd></>}
           {settings.profile && <><dt>Format</dt><dd>{PROFILE_NAMES[settings.profile] ?? settings.profile}</dd></>}
         </dl>
@@ -237,7 +241,9 @@ export function ChatPanel(props: Props) {
   const ideas = suggestions(timeline, assets);
   return <section className="chat-panel" aria-label="Director">
     <header className="chat-head">
-      <div><h2>Director</h2><span>Runs on this computer · nothing is uploaded</span></div>
+      <div><h2>Director</h2><span>{props.footage && props.footage.pending > 0
+        ? `Watching your footage · ${props.footage.pending} video${props.footage.pending === 1 ? '' : 's'} to go`
+        : 'Runs on this computer · nothing is uploaded'}</span></div>
       {messages.length > 0 && <button className="quiet small" onClick={clearChat}>Clear</button>}
     </header>
     <div className="chat-scroll" ref={scroller}>
