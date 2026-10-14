@@ -134,7 +134,7 @@ export function editReadyLine(timeline: Timeline): string {
   const clips = videoClipCount(timeline);
   const seconds = timeline.duration_ticks / timeline.time_base.ticks_per_second;
   return `Your edit is ready: ${clips} clip${clips === 1 ? '' : 's'}, ${seconds.toFixed(1)} s. ` +
-    'Play it, then tell me what to change — or edit it yourself on the right.';
+    'Play it, then tell me what to change — or edit it yourself in the editor.';
 }
 
 /** What is saved: pending proposals and running jobs cannot survive a reload. */
@@ -206,6 +206,6 @@ export function greeting(timeline: Timeline | null, assets: Asset[]): string[] {
   const lines = ['Hi, I\'m the Director. I work only on this computer — nothing is uploaded.'];
   if (!hasVideo || !hasSong) lines.push('Add your videos and a song with ＋ Add media, then tell me what video you want.');
   else if (!videoClipCount(timeline)) lines.push('Tell me what video you want — length, mood, format, transitions, a title — and I\'ll cut it to the beat of your song.');
-  else lines.push('Tell me what to change, ask why I picked a clip, or edit it yourself on the right. Every change can be undone.');
+  else lines.push('Tell me what to change, ask why I picked a clip, or edit it yourself in the editor. Every change can be undone.');
   return lines;
 }

@@ -280,3 +280,30 @@ def test_imported_media_remains_external_to_project_root(tmp_path):
     library.import_asset(source)
     assert source.exists()
     assert not (library.root / "assets" / source.name).exists()
+
+
+def test_resolve_source_hashes_each_file_once_but_still_sees_changes(tmp_path, monkeypatch):
+    """A render or Director preview resolves every clip; re-hashing long videos per clip took seconds."""
+    import os
+
+    import poc.project_assets as pa
+
+    lib = ProjectAssetLibrary.create(tmp_path / "p", project_id="p_cache")
+    source = _video(tmp_path / "src" / "a.mp4")
+    asset = lib.import_asset(source)
+    calls = []
+    real = pa.sha256_file
+    monkeypatch.setattr(pa, "sha256_file", lambda p: calls.append(p) or real(p))
+    pa._HASHES.clear()
+    for _ in range(5):
+        assert lib.resolve_source(asset.asset_id) == source.resolve()
+    assert len(calls) == 1
+
+    # same size, different content, newer time: detected
+    data = bytearray(source.read_bytes())
+    data[-1] ^= 0xFF
+    source.write_bytes(bytes(data))
+    stat = source.stat()
+    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    with pytest.raises(AssetImportError, match="content changed"):
+        lib.resolve_source(asset.asset_id)

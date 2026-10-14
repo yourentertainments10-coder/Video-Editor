@@ -6,6 +6,7 @@ import mimetypes
 import os
 import tempfile
 from datetime import datetime, timezone
+import threading
 from pathlib import Path
 from typing import Literal
 
@@ -65,6 +66,30 @@ class ProjectAsset(BaseModel):
             mime_type=self.mime_type,
             metadata={**self.metadata, "content_hash": self.content_hash},
         )
+
+
+_HASHES: dict[tuple[str, int, int], str] = {}
+_HASHES_LOCK = threading.Lock()
+
+
+def _verified_hash(path: Path) -> str:
+    """SHA-256 of a source file, re-read only when its size or modification time changed.
+
+    A render, a timeline check or a Director preview resolves every clip's source; hashing a
+    long phone video for each of 50+ clips took seconds every time.
+    """
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    with _HASHES_LOCK:
+        known = _HASHES.get(key)
+    if known is not None:
+        return known
+    digest = sha256_file(path)
+    with _HASHES_LOCK:
+        if len(_HASHES) > 4096:
+            _HASHES.clear()
+        _HASHES[key] = digest
+    return digest
 
 
 class ProjectDocument(BaseModel):
@@ -236,7 +261,7 @@ class ProjectAssetLibrary:
         path = Path(asset.source_path)
         if not path.is_file():
             raise AssetImportError(f"asset source is missing: {path}; relink asset {asset_id!r}")
-        if verify_hash and sha256_file(path) != asset.content_hash:
+        if verify_hash and _verified_hash(path) != asset.content_hash:
             raise AssetImportError(f"asset source content changed: {path}; relink or restore the original")
         return path
 

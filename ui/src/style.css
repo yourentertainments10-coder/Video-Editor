@@ -288,7 +288,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .view-tabs button.active { background: var(--panel); border-color: var(--line); color: var(--text); }
   .studio.view-chat .editor-column { display: none; }
   .studio.view-edit .chat-panel { display: none; }
-  .chat-panel { position: relative; border-right: 0; height: calc(100vh - 160px); min-height: 420px; }
+  .chat-panel { position: relative; border-right: 0; height: calc(100dvh - 160px); min-height: 300px; }
   .editor-column { padding: 16px 14px 32px; }
   .editor-workbench { grid-template-columns: minmax(0, 1fr); }
   .editor-workbench .export-panel, .editor-workbench .inspector { grid-column: auto; grid-row: auto; }
