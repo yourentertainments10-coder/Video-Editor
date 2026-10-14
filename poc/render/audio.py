@@ -218,3 +218,82 @@ def loudness_normalize(
     cmd = [FFMPEG_EXE, "-y", "-hide_banner", *FFMPEG_NETWORK_SAFE[1:], "-i", str(in_path),
            "-af", filt, *_wav_output_args(), str(Path(out_path))]
     return run_ffmpeg_atomic(cmd, Path(out_path), cancel=cancel, label="loudness normalization")
+
+
+def measure_loudness(path: Path, *, cancel: Callable[[], bool] | None = None) -> tuple[float, float]:
+    """Integrated loudness (LUFS) and true peak (dBTP) of a file's audio (video not decoded)."""
+    from poc.render._process import run_process
+    result = run_process(
+        [FFMPEG_EXE, "-hide_banner", "-nostats", *FFMPEG_NETWORK_SAFE[1:], "-i", str(path),
+         "-vn", "-af", "ebur128=peak=true", "-f", "null", "-"], cancel=cancel,
+    )
+    if result.returncode:
+        raise RuntimeError(f"FFmpeg loudness measurement failed: {result.stderr}")
+    integrated = re.findall(r"\bI:\s*(-?(?:\d+(?:\.\d*)?|\.\d+)|-?inf)\s+LUFS", result.stderr)
+    peak = re.findall(r"\bPeak:\s*(-?(?:\d+(?:\.\d*)?|\.\d+)|-?inf)\s+dBFS", result.stderr)
+    if not integrated or not peak:
+        raise RuntimeError(f"FFmpeg ebur128 returned no measurement: {result.stderr[-500:]}")
+    return float(integrated[-1]), float(peak[-1])
+
+
+DELIVERY_MAX_ATTEMPTS = 4
+DELIVERY_TP_MARGIN_DB = 0.3
+DELIVERY_MIN_TP_TARGET_OFFSET_DB = 4.0
+
+
+def encode_delivery_audio(
+    mixed_wav: Path,
+    out_path: Path,
+    *,
+    target_lufs: float = -14.0,
+    true_peak_db: float = -1.0,
+    bitrate: str = "192k",
+    cancel: Callable[[], bool] | None = None,
+) -> dict:
+    """Normalise ``mixed_wav`` and encode the final AAC so the ENCODED file meets the limits.
+
+    AAC encoding raises true peaks (by up to ~2 dB on sharp material), so a WAV that is
+    exactly at the limit fails once encoded. This normalises, encodes, measures the encoded
+    file and, if its true peak is over ``true_peak_db``, lowers the loudnorm true-peak
+    target by the overshoot (+0.3 dB) and tries again. loudnorm keeps the integrated loudness
+    while it limits, so loudness stays on target. After ``DELIVERY_MAX_ATTEMPTS`` a final
+    plain gain reduction guarantees the peak limit. Deterministic for identical input.
+    Returns a small report: attempts, wav_tp_target, lufs, true_peak.
+    """
+    out_path = Path(out_path)
+    work_wav = out_path.with_name(out_path.stem + ".normalised.wav")
+    silent = measure_loudness(mixed_wav, cancel=cancel)[0] <= -70
+
+    def encode(source: Path, gain_db: float = 0.0) -> tuple[float, float]:
+        cmd = [FFMPEG_EXE, "-y", "-hide_banner", *FFMPEG_NETWORK_SAFE[1:], "-i", str(source)]
+        if gain_db:
+            cmd += ["-af", f"volume={gain_db:.3f}dB"]
+        cmd += ["-vn", "-c:a", "aac", "-b:a", bitrate, "-ar", "48000", "-ac", "2",
+                "-flags:a", "+bitexact", "-fflags", "+bitexact", "-map_metadata", "-1",
+                str(out_path)]
+        run_ffmpeg_atomic(cmd, out_path, cancel=cancel, label="delivery audio encode")
+        return measure_loudness(out_path, cancel=cancel)
+
+    if silent:
+        lufs, peak = encode(mixed_wav)
+        return {"attempts": 1, "wav_tp_target": None, "lufs": lufs, "true_peak": peak}
+
+    target = true_peak_db
+    floor = true_peak_db - DELIVERY_MIN_TP_TARGET_OFFSET_DB
+    attempts = 0
+    lufs = peak = float("nan")
+    while attempts < DELIVERY_MAX_ATTEMPTS:
+        attempts += 1
+        loudness_normalize(mixed_wav, work_wav, target_lufs=target_lufs,
+                           true_peak_db=target, cancel=cancel)
+        lufs, peak = encode(work_wav)
+        if peak <= true_peak_db:
+            break
+        if target <= floor:
+            break
+        target = round(max(floor, target - (peak - true_peak_db) - DELIVERY_TP_MARGIN_DB), 2)
+    if peak > true_peak_db:
+        attempts += 1
+        lufs, peak = encode(work_wav, gain_db=true_peak_db - peak - 0.1)
+    work_wav.unlink(missing_ok=True)
+    return {"attempts": attempts, "wav_tp_target": target, "lufs": lufs, "true_peak": peak}

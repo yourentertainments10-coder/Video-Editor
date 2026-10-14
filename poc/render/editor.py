@@ -10,7 +10,7 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -20,8 +20,8 @@ from poc.ingest.normalize import FFMPEG_EXE, FFMPEG_NETWORK_SAFE
 from poc.project_assets import AssetImportError, ProjectAssetLibrary
 from poc.render._process import run_ffmpeg_atomic, run_process
 from poc.render.aspect import fit_to_frame_to_file
-from poc.render.audio import loudness_normalize, render_audio_track
-from poc.render.export import ExportProfile, VerifyReport, _measure_input_i, get_profile, verify_render
+from poc.render.audio import encode_delivery_audio, render_audio_track
+from poc.render.export import ExportProfile, VerifyReport, get_profile, verify_render
 from poc.render.effects import build_effect_filters
 from poc.render.text import TextOverlay, _FONTS_DIR, _ass_filter, _write_ass
 from poc.render.transitions import Join, Segment, render_sequence_to_file
@@ -101,6 +101,7 @@ class RenderResult:
     report: VerifyReport
     encoder: dict[str, object]
     timings: dict[str, float]
+    audio: dict[str, object] = field(default_factory=dict)
 
 
 _TRANSITION_MAP = {
@@ -579,6 +580,7 @@ class EditorRenderer:
                     ass_filter = _ass_filter(Path(ass_path.name))
                 timings["prepare"] = float(time.perf_counter() - prepare_started)
 
+                audio_report: dict = {}
                 failed = threading.Event()
                 def cancelled() -> bool:
                     return failed.is_set() or (cancel is not None and cancel())
@@ -593,16 +595,14 @@ class EditorRenderer:
                         track_wav, plan.audio_placements, temp_dir / "mixed.wav",
                         duration_ms=plan.duration_ms, cancel=cancelled,
                     )
-                    final_wav = temp_dir / "final.wav"
-                    if _measure_input_i(mixed_wav) <= -70:
-                        shutil.copyfile(mixed_wav, final_wav)
-                    else:
-                        loudness_normalize(
-                            mixed_wav, final_wav, target_lufs=selected.target_lufs,
-                            true_peak_db=selected.true_peak_db, cancel=cancelled,
-                        )
+                    final_audio = temp_dir / "final.m4a"
+                    audio_report.update(encode_delivery_audio(
+                        mixed_wav, final_audio, target_lufs=selected.target_lufs,
+                        true_peak_db=selected.true_peak_db, bitrate=selected.audio_bitrate,
+                        cancel=cancelled,
+                    ))
                     timings["audio"] = float(time.perf_counter() - began)
-                    return final_wav
+                    return final_audio
 
                 def video_job() -> Path:
                     began = time.perf_counter()
@@ -809,7 +809,7 @@ class EditorRenderer:
                                 if isinstance(error, InterruptedError):
                                     raise RenderCancelled("render cancelled") from error
                                 raise error
-                    final_wav = audio_future.result()
+                    final_audio = audio_future.result()
                     video_path = video_future.result()
 
                 self._check_cancel(cancel)
@@ -817,10 +817,9 @@ class EditorRenderer:
                 mux_started = time.perf_counter()
                 muxed = temp_dir / "muxed.mp4"
                 mux_cmd = [FFMPEG_EXE, "-y", "-fflags", "+bitexact", *FFMPEG_NETWORK_SAFE[1:],
-                           "-i", str(video_path), "-i", str(final_wav),
+                           "-i", str(video_path), "-i", str(final_audio),
                            "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
-                           "-c:a", "aac", "-b:a", selected.audio_bitrate,
-                           "-ar", "48000", "-ac", "2", "-flags:v", "+bitexact",
+                           "-c:a", "copy", "-flags:v", "+bitexact",
                            "-flags:a", "+bitexact", "-map_metadata", "-1",
                            "-movflags", "+faststart", str(muxed)]
                 run_ffmpeg_atomic(mux_cmd, muxed, cancel=cancel, label="render mux")
@@ -850,7 +849,7 @@ class EditorRenderer:
                 out_path=out, duration_frames=plan.duration_frames,
                 duration_ms=plan.duration_ms, video_clip_order=plan.video_clip_order,
                 audio_clip_count=plan.audio_clip_count, report=report,
-                encoder=encoder, timings=timings,
+                encoder=encoder, timings=timings, audio=audio_report,
             )
         except InterruptedError as exc:
             raise RenderCancelled("render cancelled") from exc
