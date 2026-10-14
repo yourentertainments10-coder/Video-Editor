@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { assetProxyUrl } from '../api';
 import { Timeline } from './ops';
-import { playbackSource } from './navigation';
+import { clipVolume, playbackSource } from './navigation';
 import { planSlots, SlotLoad } from './playerSlots';
 
 type Props = { timeline: Timeline; projectId: string; playhead: number; playing: boolean; seekSerial: number };
@@ -40,8 +40,13 @@ export function PreviewPlayer({ timeline, projectId, playhead, playing, seekSeri
     const current = players.current[plan.active];
     const standby = players.current[(1 - plan.active) as 0 | 1];
     if (standby && !standby.paused) standby.pause();
+    if (standby) standby.muted = true;
     const source = playbackSource(timeline, 'video', playhead);
     if (!current || !source) { current?.pause(); return; }
+    // the clip's own sound plays with the preview (as in the render), at its clip gain
+    const volume = clipVolume(timeline, source.clip_id);
+    current.volume = volume;
+    current.muted = !playing || volume === 0;
     const expected = source.source_ms / 1000;
     if (current.readyState >= 1 && Math.abs(current.currentTime - expected) > DRIFT_S) current.currentTime = expected;
     if (playing && current.paused) void current.play().catch(() => undefined);

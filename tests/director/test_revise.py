@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from poc.director.revise import apply_operations, parse_revision, video_clips
+from poc.director.revise import apply_operations, parse_instructions as parse_revision, video_clips
 from poc.render.editor import EditorRenderer
 from poc.timeline import validate_editor_timeline
 from tests.director.ld2_fixture import fixture
@@ -125,3 +125,52 @@ def test_fades_render(tmp_path):
     new, _ = apply_operations(TL, parse_revision("add fades", TL).operations)
     fades = [c for c in video_clips(new) if c.transition]
     assert len(fades) == 6 and all(c.transition.duration_ticks == 400 for c in fades)
+
+
+def test_intro_cut_spans_several_short_clips():
+    # Real auto-edits have ~0.5 s clips: "shorten the intro by 1 second" must cut across clips,
+    # not refuse because clip 1 alone is shorter than 1 s (found testing real footage).
+    short = fixture(n=10, clip_ms=500, beat_ms=500)
+    result = parse_revision("shorten the intro by 1 second", short)
+    new, notes = apply_operations(short, result.operations)
+    assert new.duration_ticks == 4000
+    assert [c.clip_id for c in video_clips(new)] == [c.clip_id for c in video_clips(short)][2:]
+    assert video_clips(new)[0].start_tick == 0
+    assert validate_editor_timeline(new) == []
+
+
+def test_ending_cut_never_leaves_a_sliver():
+    short = fixture(n=6, clip_ms=500, beat_ms=500)
+    new, _ = apply_operations(short, parse_revision("make the ending 0.4 seconds shorter", short).operations)
+    assert all(c.duration_ticks >= 200 for c in video_clips(new))
+    assert validate_editor_timeline(new) == []
+
+
+def test_explain_shows_only_the_file_name_for_windows_paths():
+    tl = fixture()
+    third = video_clips(tl)[2].asset_id
+    assets = [a.model_copy(update={"uri": "D:\\Python\\video editor\\project\\footage\\clip_x.mp4"}) if a.asset_id == third else a
+              for a in tl.assets]
+    answer = parse_revision("why clip 3?", tl.model_copy(update={"assets": assets})).answer
+    assert "Python" not in answer and "clip_x.mp4" in answer
+
+
+def test_several_changes_in_one_sentence_apply_in_order():
+    result = parse_revision("remove clips 2 to 4 and make it black and white", TL)
+    new, _ = apply_operations(TL, result.operations)
+    assert len(video_clips(new)) == 4
+    assert all(any(e.effect_id == "saturation" for e in c.effects) for c in video_clips(new))
+    assert len(result.summary) == 2
+
+
+def test_a_change_to_a_clip_removed_earlier_in_the_same_sentence_is_refused():
+    result = parse_revision("remove clip 3 and fade into clip 3", TL)
+    with pytest.raises(ValueError):
+        apply_operations(TL, result.operations)
+
+
+def test_splitting_keeps_lists_and_phrases_whole():
+    from poc.director.revise import split_instructions
+    assert split_instructions("remove clips 2 and 5") == ["remove clips 2 and 5"]
+    assert split_instructions("make it black and white") == ["make it black and white"]
+    assert split_instructions("title 'Rock and Roll, then more'") == ["title 'Rock and Roll, then more'"]

@@ -23,7 +23,7 @@ from poc.director.brief import MAX_TITLE_CHARS, _normalise, _words_to_numbers
 from poc.timeline import EditorClip, EditorTimeline, EffectRef, MediaAsset, TransitionRef
 
 Intent = Literal["remove", "trim", "length", "transition", "look", "motion", "title", "undo", "redo",
-                 "explain", "retime", "unsupported", "unknown"]
+                 "explain", "retime", "unsupported", "unknown", "multiple"]
 
 MIN_CLIP_MS = 200
 FADE_MS = 400
@@ -42,7 +42,7 @@ CLIP_WORDS = r"(?:clip|clips|shot|shots|scene|scenes)"
 class Operation(BaseModel):
     """One change. ``op`` decides which fields are used."""
 
-    op: Literal["remove_clips", "trim_clip", "set_length", "set_transitions", "set_transition",
+    op: Literal["remove_clips", "trim_clip", "cut_range", "set_length", "set_transitions", "set_transition",
                 "adjust_look", "clear_look", "add_motion", "set_title", "remove_title"]
     clip_ids: list[str] = Field(default_factory=list)
     side: Literal["start", "end"] | None = None
@@ -174,6 +174,51 @@ _TITLE_RE = re.compile(r"(?:\"([^\"]{1,200})\"|'([^']{1,200})')")
 
 # ---------------------------------------------------------------- the parser
 
+_COMMAND_START = (r"(?:make|add|remove|delete|drop|shorten|trim|cut|zoom|pan|fade|crossfade|blur|unblur|title|"
+                  r"put|change|use|no|get rid|set|keep|reset|clear|undo|redo|why)\b")
+_SPLIT_RE = re.compile(rf"\s*(?:;|\.\s+|,?\s*\band then\b|,?\s*\bthen\b|,?\s*\bphir\b|,?\s*\baur\b\s+(?={_COMMAND_START})|"
+                       rf",\s*(?={_COMMAND_START})|\s+\band\b\s+(?={_COMMAND_START}))\s*", re.IGNORECASE)
+
+
+def split_instructions(text: str) -> list[str]:
+    """'remove clip 2 and make it black and white' -> ['remove clip 2', 'make it black and white'].
+
+    Splits only where a new command word starts, so 'remove clips 2 and 5' and
+    'black and white' stay whole. Quoted titles are never split.
+    """
+    quoted = list(_TITLE_RE.finditer(text or ""))
+    masked = text or ""
+    for m in quoted:
+        masked = masked[:m.start()] + "\0" * (m.end() - m.start()) + masked[m.end():]
+    parts, last = [], 0
+    for m in _SPLIT_RE.finditer(masked):
+        if m.start() == 0:
+            continue
+        parts.append(text[last:m.start()])
+        last = m.end()
+    parts.append(text[last:])
+    return [p.strip(" ,.") for p in parts if p.strip(" ,.")]
+
+
+def parse_instructions(text: str, timeline: EditorTimeline) -> RevisionResult:
+    """One or several instructions in one sentence. Clip numbers always refer to the timeline as
+    it is now (before any of the changes), like people mean them."""
+    parts = split_instructions(text)
+    if len(parts) <= 1:
+        return parse_revision(text, timeline)
+    results = [parse_revision(part, timeline) for part in parts]
+    single = {"undo", "redo", "explain", "retime"}
+    if any(r.intent in single for r in results):
+        return RevisionResult(intent="unknown", questions=[
+            "Ask 'undo', 'why …' or 'faster/calmer' on its own, not together with other changes."])
+    combined = RevisionResult(intent="multiple")
+    for part, r in zip(parts, results):
+        combined.operations.extend(r.operations)
+        combined.summary.extend(r.summary)
+        combined.questions.extend(f"'{part}': {q}" for q in r.questions)
+    return combined
+
+
 def parse_revision(text: str, timeline: EditorTimeline) -> RevisionResult:
     raw = _normalise(text or "")
     clips = video_clips(timeline)
@@ -212,7 +257,7 @@ def parse_revision(text: str, timeline: EditorTimeline) -> RevisionResult:
             return result("explain", questions=["Which clip? e.g. 'why clip 3?'"])
         clip = clips[refs.indices[0] - 1]
         asset = next((a for a in timeline.assets if a.asset_id == clip.asset_id), None)
-        name = (asset.uri or asset.asset_id).rsplit("/", 1)[-1] if asset else clip.asset_id
+        name = re.split(r"[\\/]", asset.uri or asset.asset_id)[-1] if asset else clip.asset_id
         if clip.rationale:
             parts = ", ".join(f"{k.replace('_', ' ')} {v:.2f}" for k, v in sorted(clip.rationale.items()))
             answer = (f"Clip {refs.indices[0]} ({name}, from {_seconds(clip.source_in_ms or 0)}) was picked by the "
@@ -298,6 +343,13 @@ def parse_revision(text: str, timeline: EditorTimeline) -> RevisionResult:
             note = " (no amount given: 1 s)"
         else:
             note = ""
+        intro = re.search(r"\b(?:intro|opening|beginning|shuruat)\b", t) and refs.named and refs.named.startswith("the intro")
+        ending = re.search(r"\b(?:ending|outro|the end|end of the video|last part)\b", t) and refs.named and refs.named.startswith("the ending")
+        if intro or ending:
+            where: Literal["start", "end"] = "start" if intro else "end"
+            return result("trim", [Operation(op="cut_range", side=where, ms=amount)],
+                          [f"Cut {_seconds(amount)} from the {'start' if intro else 'end'} of the video{note}"
+                           f"{'; later clips move earlier' if intro else ''}."])
         side: Literal["start", "end"] = "start" if re.search(
             r"\b(?:intro|opening|beginning|start|shuruat|first \d+(?:\.\d+)?\s*(?:ms|s|sec|secs|seconds?))\b", t) else "end"
         ops = [Operation(op="trim_clip", clip_ids=[cid], side=side, ms=amount) for cid in ids]
@@ -426,6 +478,51 @@ def _remove_range(tl: EditorTimeline, clip: EditorClip, side: str, ms: float) ->
     return _fit_music_and_length(tl, clips)
 
 
+def _widen_to_clip_edges(tl: EditorTimeline, start: int, end: int) -> tuple[int, int]:
+    """Do not leave a sliver (< MIN_CLIP_MS) of a video clip at either edge of a cut range."""
+    minimum = _ticks(tl, MIN_CLIP_MS)
+    for c in video_clips(tl):
+        cs, ce = c.start_tick, c.start_tick + c.duration_ticks
+        if cs < start < ce and start - cs < minimum:
+            start = cs
+        if cs < end < ce and ce - end < minimum:
+            end = ce
+    return start, end
+
+
+def _cut_range(tl: EditorTimeline, start: int, end: int) -> EditorTimeline:
+    """Remove the time [start, end) from every visual track and close the gap."""
+    delta = end - start
+    out: list[EditorClip] = []
+    for c in tl.clips:
+        if c.track_id == "music":
+            out.append(c)
+            continue
+        cs, ce = c.start_tick, c.start_tick + c.duration_ticks
+        if ce <= start:
+            out.append(c)
+        elif cs >= end:
+            out.append(c.model_copy(update={"start_tick": cs - delta}))
+        elif cs >= start and ce <= end:
+            continue                                            # entirely inside: removed
+        elif cs < start and ce > end:                           # the range is inside this clip
+            update = {"duration_ticks": c.duration_ticks - delta}
+            if c.source_out_ms is not None:
+                update["source_out_ms"] = c.source_out_ms - int(round(_ms(tl, delta)))
+            out.append(c.model_copy(update=update))
+        elif cs < start:                                        # clip runs into the range: cut its end
+            update = {"duration_ticks": start - cs}
+            if c.source_out_ms is not None:
+                update["source_out_ms"] = c.source_out_ms - int(round(_ms(tl, ce - start)))
+            out.append(c.model_copy(update=update))
+        else:                                                   # clip starts inside the range: cut its start
+            update = {"start_tick": start, "duration_ticks": ce - end}
+            if c.source_in_ms is not None:
+                update["source_in_ms"] = c.source_in_ms + int(round(_ms(tl, end - cs)))
+            out.append(c.model_copy(update=update))
+    return _fit_music_and_length(tl, out)
+
+
 def apply_operations(timeline: EditorTimeline, operations: list[Operation]) -> tuple[EditorTimeline, list[str]]:
     """Apply operations to a copy of ``timeline``. Returns (new timeline, extra notes).
 
@@ -437,6 +534,11 @@ def apply_operations(timeline: EditorTimeline, operations: list[Operation]) -> t
     for op in operations:
         clips = video_clips(tl)
         by_id = {c.clip_id: c for c in tl.clips}
+        gone = [cid for cid in op.clip_ids if cid not in by_id]
+        if gone and op.op in ("adjust_look", "clear_look") and len(gone) < len(op.clip_ids):
+            op = op.model_copy(update={"clip_ids": [c for c in op.clip_ids if c in by_id]})   # "everything" after a removal
+        elif gone:
+            raise ValueError("one change refers to a clip that an earlier change in the same request removes")
         if op.op == "remove_clips":
             for cid in sorted(op.clip_ids, key=lambda i: -by_id[i].start_tick):   # last first
                 clip = {c.clip_id: c for c in tl.clips}[cid]
@@ -457,6 +559,18 @@ def apply_operations(timeline: EditorTimeline, operations: list[Operation]) -> t
                 if beats:
                     notes.append(f"Trimmed {_seconds(ms)} ({beats} beat{'s' if beats > 1 else ''}) so later cuts "
                                  f"stay on the beat.")
+        elif op.op == "cut_range":
+            ms, beats = _snap_to_beats(tl, float(op.ms or 0))
+            ms = _quantise(tl, ms)
+            total = _ms(tl, tl.duration_ticks)
+            if ms >= total - MIN_CLIP_MS:
+                raise ValueError(f"the video is only {_seconds(total)} long; it cannot lose {_seconds(ms)}")
+            start, end = (0, _ticks(tl, ms)) if op.side == "start" else (tl.duration_ticks - _ticks(tl, ms), tl.duration_ticks)
+            start, end = _widen_to_clip_edges(tl, start, end)
+            tl = _cut_range(tl, start, end)
+            if beats and op.side == "start":
+                notes.append(f"Cut {_seconds(_ms(tl, end - start))} (about {beats} beat{'s' if beats > 1 else ''}) so later "
+                             f"cuts stay on the beat.")
         elif op.op == "set_length":
             target = _ticks(tl, op.ms or 0)
             while tl.duration_ticks > target:

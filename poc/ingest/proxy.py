@@ -6,6 +6,9 @@ import hashlib
 import json
 import os
 import subprocess
+import threading
+import uuid
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
@@ -43,6 +46,48 @@ def _source_path(asset: MediaAsset) -> Path:
         raise FileNotFoundError(path)
     return path
 
+
+
+# Cached media is built on demand from server threads, and the browser often asks for the
+# same file twice at once (two preview players, Range requests). Each output therefore gets
+# one build lock, a unique partial file, and a decode check before it becomes the cache.
+# CACHE_VERSION 2 discards caches built before this (some could be corrupt).
+CACHE_VERSION = 2
+_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_BUILD_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def _building(out_path: Path):
+    with _BUILD_LOCKS_GUARD:
+        lock = _BUILD_LOCKS.setdefault(str(out_path), threading.Lock())
+    with lock:
+        yield
+
+
+def _partial(out_path: Path, suffix: str) -> Path:
+    """A unique partial file next to ``out_path``. Call inside ``_building(out_path)``: it also
+    removes leftovers of earlier interrupted builds of the same output."""
+    for stale in out_path.parent.glob(f"{out_path.stem}.*.partial{suffix}"):
+        stale.unlink(missing_ok=True)
+    return out_path.with_name(f"{out_path.stem}.{os.getpid()}.{uuid.uuid4().hex[:10]}.partial{suffix}")
+
+
+def _check_media(path: Path, *, video: bool = False, audio: bool = False) -> None:
+    """Raise if ``path`` cannot be opened and decoded (first frame of each wanted stream)."""
+    import av
+    try:
+        with av.open(str(path)) as container:
+            for kind, wanted in (("video", video), ("audio", audio)):
+                if not wanted:
+                    continue
+                streams = getattr(container.streams, kind)
+                if not streams:
+                    raise RuntimeError(f"no {kind} stream")
+                container.seek(0)
+                next(container.decode(**{kind: 0}))
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"generated media is not playable: {exc}") from exc
 
 def _content_hash(path: Path) -> str:
     digest = hashlib.sha256()
@@ -101,6 +146,7 @@ def make_proxy(asset: MediaAsset, cache_dir: Path) -> Path:
     duration = _duration_seconds(asset, normalized)
     params = {
         "type": "proxy",
+        "cache_version": CACHE_VERSION,
         "duration_ms": int(duration * 1000),
         "normalize_filter": build_normalize_filter(normalized),
         "scale": f"-2:min({PROXY_HEIGHT},ih)",
@@ -117,9 +163,14 @@ def make_proxy(asset: MediaAsset, cache_dir: Path) -> Path:
     if out_path.is_file():
         return out_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    partial_path = out_path.with_name(
-        f"{out_path.stem}.{os.getpid()}.partial.mp4"
-    )
+    with _building(out_path):
+        if out_path.is_file():
+            return out_path
+        return _build_proxy(asset, normalized, duration, params, out_path)
+
+
+def _build_proxy(asset: MediaAsset, normalized, duration: float, params: dict, out_path: Path) -> Path:
+    partial_path = _partial(out_path, ".mp4")
 
     filters = [
         params["normalize_filter"],
@@ -143,6 +194,7 @@ def make_proxy(asset: MediaAsset, cache_dir: Path) -> Path:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg proxy encoding failed: {result.stderr}")
+        _check_media(partial_path, video=True, audio=normalized.has_audio)
         os.replace(partial_path, out_path)
     except BaseException:
         partial_path.unlink(missing_ok=True)
@@ -164,6 +216,7 @@ def make_thumbnails(
     normalize_filter = build_normalize_filter(normalized)
     params = {
         "type": "thumbnails",
+        "cache_version": CACHE_VERSION,
         "duration_ms": int(duration * 1000),
         "normalize_filter": normalize_filter,
         "count": count,
@@ -177,14 +230,18 @@ def make_thumbnails(
     if all(path.is_file() for path in thumbs):
         return thumbs
     thumb_dir.mkdir(parents=True, exist_ok=True)
+    with _building(thumb_dir):
+        _build_thumbnails(asset, duration, normalize_filter, width, count, thumbs)
+    return thumbs
 
+
+def _build_thumbnails(asset: MediaAsset, duration: float, normalize_filter: str, width: int,
+                      count: int, thumbs: list[Path]) -> None:
     for index, thumb in enumerate(thumbs):
         if thumb.is_file():
             continue
         timestamp = duration * (index + 0.5) / count
-        partial_path = thumb.with_name(
-            f"{thumb.stem}.{os.getpid()}.partial.jpg"
-        )
+        partial_path = _partial(thumb, ".jpg")
         cmd = [FFMPEG_EXE, "-y", *FFMPEG_NETWORK_SAFE[1:]]
         if asset.kind == "image":
             cmd.extend(["-noautorotate", "-i", str(asset.uri)])
@@ -202,7 +259,6 @@ def make_thumbnails(
         except BaseException:
             partial_path.unlink(missing_ok=True)
             raise
-    return thumbs
 
 
 def make_audio_preview(asset: MediaAsset, cache_dir: Path) -> Path:
@@ -212,7 +268,7 @@ def make_audio_preview(asset: MediaAsset, cache_dir: Path) -> Path:
     if not normalized.has_audio:
         raise ValueError("Media asset has no audio stream")
     params = {
-        "type": "audio_preview", "codec": "aac", "bitrate": "128k",
+        "type": "audio_preview", "cache_version": CACHE_VERSION, "codec": "aac", "bitrate": "128k",
         "sample_rate": 48000, "channels": 2, "format": "m4a",
         "bitexact": True, "map_metadata": -1,
     }
@@ -221,7 +277,14 @@ def make_audio_preview(asset: MediaAsset, cache_dir: Path) -> Path:
     if out_path.is_file():
         return out_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    partial_path = out_path.with_name(f"{out_path.stem}.{os.getpid()}.partial.m4a")
+    with _building(out_path):
+        if out_path.is_file():
+            return out_path
+        return _build_audio_preview(source, out_path)
+
+
+def _build_audio_preview(source: Path, out_path: Path) -> Path:
+    partial_path = _partial(out_path, ".m4a")
     cmd = [FFMPEG_EXE, "-y", "-fflags", "+bitexact", *FFMPEG_NETWORK_SAFE[1:],
            "-i", str(source), "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "128k",
            "-ar", "48000", "-ac", "2", "-flags:a", "+bitexact", "-map_metadata", "-1",
@@ -230,6 +293,7 @@ def make_audio_preview(asset: MediaAsset, cache_dir: Path) -> Path:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg audio preview encoding failed: {result.stderr}")
+        _check_media(partial_path, audio=True)
         os.replace(partial_path, out_path)
     except BaseException:
         partial_path.unlink(missing_ok=True)

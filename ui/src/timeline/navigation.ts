@@ -42,3 +42,13 @@ export function playbackSource(tl: Timeline, trackId: string, tick: number):
     clip_end_tick: Math.min(tl.duration_ticks, clip.start_tick + clip.duration_ticks),
   };
 }
+
+/** Preview volume (0..1) for a clip: 0 when muted, else its gain in dB as a linear factor (max 1). */
+export function clipVolume(tl: Timeline, clipId: string): number {
+  const clip = tl.clips.find(item => item.clip_id === clipId);
+  if (!clip) return 0;
+  const audio = clip.audio as { muted?: boolean; gain_db?: number } | undefined | null;
+  if (audio?.muted) return 0;
+  const gain = Number(audio?.gain_db ?? 0);
+  return Math.max(0, Math.min(1, Math.pow(10, gain / 20)));
+}

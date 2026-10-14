@@ -58,3 +58,18 @@ describe('playbackSource', () => {
     expect(playbackSource(tl(), 'video', 2000)).toBeNull();
   });
 });
+
+import { clipVolume } from '../src/timeline/navigation';
+
+describe('clipVolume', () => {
+  const t = (audio: unknown): any => ({ ...tl(), clips: [{ clip_id: 'x', asset_id: 'v1', track_id: 'video', start_tick: 0, duration_ticks: 100, source_in_ms: 0, source_out_ms: 100, audio }] });
+  it('plays clip sound at full volume by default', () => { expect(clipVolume(t(undefined), 'x')).toBe(1); });
+  it('is silent for muted clips and unknown clips', () => {
+    expect(clipVolume(t({ muted: true, gain_db: 0 }), 'x')).toBe(0);
+    expect(clipVolume(t(undefined), 'nope')).toBe(0);
+  });
+  it('turns gain in dB into volume, never above 1', () => {
+    expect(clipVolume(t({ gain_db: -6 }), 'x')).toBeCloseTo(0.501, 3);
+    expect(clipVolume(t({ gain_db: 6 }), 'x')).toBe(1);
+  });
+});

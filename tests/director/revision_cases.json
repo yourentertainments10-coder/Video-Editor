@@ -264,10 +264,8 @@
    "intent": "trim",
    "operations": [
     {
-     "op": "trim_clip",
-     "clips": [
-      1
-     ],
+     "op": "cut_range",
+     "clips": [],
      "side": "start",
      "ms": 1000
     }
@@ -279,10 +277,8 @@
    "intent": "trim",
    "operations": [
     {
-     "op": "trim_clip",
-     "clips": [
-      1
-     ],
+     "op": "cut_range",
+     "clips": [],
      "side": "start",
      "ms": 1000
     }
@@ -294,10 +290,8 @@
    "intent": "trim",
    "operations": [
     {
-     "op": "trim_clip",
-     "clips": [
-      1
-     ],
+     "op": "cut_range",
+     "clips": [],
      "side": "start",
      "ms": 500
     }
@@ -309,10 +303,8 @@
    "intent": "trim",
    "operations": [
     {
-     "op": "trim_clip",
-     "clips": [
-      7
-     ],
+     "op": "cut_range",
+     "clips": [],
      "side": "end",
      "ms": 1000
     }
@@ -324,10 +316,8 @@
    "intent": "trim",
    "operations": [
     {
-     "op": "trim_clip",
-     "clips": [
-      7
-     ],
+     "op": "cut_range",
+     "clips": [],
      "side": "end",
      "ms": 500
     }
@@ -1394,6 +1384,142 @@
   },
   {
    "text": "make it more cinematic",
+   "intent": "unknown",
+   "operations": [],
+   "questions": 1
+  },
+  {
+   "text": "cut 3 seconds from the beginning",
+   "intent": "trim",
+   "operations": [
+    {
+     "op": "cut_range",
+     "clips": [],
+     "side": "start",
+     "ms": 3000
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "remove clips 2 to 4 and make it black and white",
+   "intent": "multiple",
+   "operations": [
+    {
+     "op": "remove_clips",
+     "clips": [
+      2,
+      3,
+      4
+     ]
+    },
+    {
+     "op": "adjust_look",
+     "clips": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+     ],
+     "effect_id": "saturation",
+     "text": "set",
+     "amount": 0.0
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "add fades, title 'Rock and Roll' at the end",
+   "intent": "multiple",
+   "operations": [
+    {
+     "op": "set_transitions",
+     "clips": [],
+     "policy": "soft"
+    },
+    {
+     "op": "set_title",
+     "clips": [],
+     "text": "Rock and Roll",
+     "at": "end"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "remove clip 2 then add fades",
+   "intent": "multiple",
+   "operations": [
+    {
+     "op": "remove_clips",
+     "clips": [
+      2
+     ]
+    },
+    {
+     "op": "set_transitions",
+     "clips": [],
+     "policy": "soft"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "make clip 2 brighter; zoom in on clip 3",
+   "intent": "multiple",
+   "operations": [
+    {
+     "op": "adjust_look",
+     "clips": [
+      2
+     ],
+     "effect_id": "brightness",
+     "text": "add",
+     "amount": 0.15
+    },
+    {
+     "op": "add_motion",
+     "clips": [
+      3
+     ],
+     "effect_id": "zoom_in"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "clip 3 hatao aur make it brighter",
+   "intent": "multiple",
+   "operations": [
+    {
+     "op": "remove_clips",
+     "clips": [
+      3
+     ]
+    },
+    {
+     "op": "adjust_look",
+     "clips": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+     ],
+     "effect_id": "brightness",
+     "text": "add",
+     "amount": 0.15
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "remove clip 2 and undo",
    "intent": "unknown",
    "operations": [],
    "questions": 1

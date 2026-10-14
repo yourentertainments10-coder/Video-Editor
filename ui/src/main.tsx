@@ -20,7 +20,7 @@ import { ReviseBar } from './timeline/ReviseBar';
 import { RevisionResponse } from './timeline/revise';
 import { canRedo, canUndo, createHistory, History, push, redo, undo } from './timeline/history';
 import { commandForKey } from './timeline/keys';
-import { formatTimecode, nextEditPoint, playbackSource, stepFrames } from './timeline/navigation';
+import { clipVolume, formatTimecode, nextEditPoint, playbackSource, stepFrames } from './timeline/navigation';
 import './style.css';
 
 const profiles = ['preview_540p', 'youtube_1080p', 'reels_9x16', 'square_1x1'];
@@ -230,6 +230,7 @@ function App() {
       const audio = audioRef.current;
       const source = playbackSource(timeline, 'music', tick);
       if (audio && source) {
+        audio.volume = clipVolume(timeline, source.clip_id);
         const expected = source.source_ms / 1000;
         if (Math.abs(audio.currentTime - expected) > 0.1) audio.currentTime = expected;
         if (audio.paused) void audio.play().catch(() => undefined);

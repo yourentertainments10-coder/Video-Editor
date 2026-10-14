@@ -21,7 +21,7 @@ from pydantic import ValidationError
 
 from poc.director import AssetRef, parse_brief, selected_video_ids
 from poc.director.apply import apply_style
-from poc.director.revise import apply_operations, parse_revision
+from poc.director.revise import apply_operations, parse_instructions
 from poc.director.brief import MAX_TITLE_CHARS
 from poc.resources import ui_dist_dir
 from poc.decide import CutterError, GridError, cut
@@ -386,7 +386,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             current = EditorTimeline.model_validate(body.get("timeline"))
         except ValidationError as exc:
             raise HTTPException(422, f"invalid timeline: {exc.errors()[:1]}") from exc
-        result = parse_revision(text, current)
+        result = parse_instructions(text, current)
         payload = result.model_dump(exclude={"operations"})
         payload["operations"] = [op.model_dump(exclude_none=True) for op in result.operations]
         payload["notes"], payload["timeline"] = [], None
