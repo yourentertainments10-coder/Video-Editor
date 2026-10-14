@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Mapping, Sequence
+
+_LABELS = itertools.count()      # unique labels for effects that need a small sub-graph (glow)
 
 
 def _parameters(effect) -> tuple[str, dict]:
@@ -122,6 +125,89 @@ def build_effect_filters(
                 f"scale=w={_expr(scaled_w)}:h={_expr(scaled_h)}:eval=frame",
                 f"crop={width}:{height}:{_expr(x)}:{_expr(y)}",
             ])
+        elif effect_id.startswith("look_") or effect_id in {"vignette", "grain", "sharpen", "glow", "rgb_split",
+                                                             "stabilize"}:
+            chain = _amount_effect(effect_id, float(p.get("amount", 0.6)), width, height)
+            if chain:
+                filters.append(chain)
+        elif effect_id in {"flash", "shake", "zoom_punch"}:
+            at = start + max(0.0, float(p.get("at_ms", 0))) / 1000
+            length = max(1.0 / fps, float(p.get("duration_ms", 300)) / 1000)
+            amount = float(p.get("amount", 0.6))
+            if amount <= 0:
+                continue
+            # 1 at the accent, falling to 0 over its duration
+            env = f"if(between(t\\,{_num(at)}\\,{_num(at + length)})\\,1-(t-{_num(at)})/{_num(length)}\\,0)"
+            if effect_id == "flash":
+                filters.append(f"eq=brightness={_expr(f'{_num(0.55 * amount)}*{env}')}:eval=frame")
+            elif effect_id == "shake":
+                pad = 1 + 0.08 * amount
+                amp = 0.03 * amount * width
+                filters.extend([
+                    f"scale=w={_even(width * pad)}:h={_even(height * pad)}",
+                    f"crop={width}:{height}:{_expr(f'(iw-ow)/2+{_num(amp)}*sin(t*53)*{env}')}:"
+                    f"{_expr(f'(ih-oh)/2+{_num(amp)}*cos(t*41)*{env}')}",
+                ])
+            else:
+                start_frame = round(at * fps)
+                frames = max(1, round(length * fps))
+                env_n = f"if(between(n\\,{start_frame}\\,{start_frame + frames})\\,1-(n-{start_frame})/{frames}\\,0)"
+                scale_expr = f"(1+{_num(0.14 * amount)}*{env_n})"
+                filters.extend([
+                    f"scale=w={_expr(f'ceil({width}*{scale_expr}/2)*2')}:h={_expr(f'ceil({height}*{scale_expr}/2)*2')}:eval=frame",
+                    f"crop={width}:{height}:(iw-{width})/2:(ih-{height})/2",
+                ])
         else:
             raise ValueError(f"unsupported effect: {effect_id}")
     return ",".join(filters)
+
+
+def _even(value: float) -> int:
+    return int(math.ceil(value / 2) * 2)
+
+
+def _amount_effect(effect_id: str, a: float, width: int, height: int) -> str:
+    """Looks, textures and repair: one strength knob each (0 = nothing)."""
+    a = min(max(a, 0.0), 1.0)
+    if a == 0:
+        return ""
+    if effect_id == "look_cinematic":
+        return (f"colorbalance=rs={_num(-0.10 * a)}:gs={_num(-0.02 * a)}:bs={_num(0.12 * a)}:"
+                f"rh={_num(0.10 * a)}:gh={_num(0.02 * a)}:bh={_num(-0.10 * a)},"
+                f"eq=contrast={_num(1 + 0.08 * a)}:saturation={_num(1 + 0.05 * a)}")
+    if effect_id == "look_vintage":
+        return (f"curves=r={_expr(f'0/{_num(0.10 * a)} 0.5/0.52 1/{_num(1 - 0.06 * a)}')}:"
+                f"g={_expr(f'0/{_num(0.05 * a)} 1/{_num(1 - 0.05 * a)}')}:"
+                f"b={_expr(f'0/{_num(0.14 * a)} 1/{_num(1 - 0.16 * a)}')},"
+                f"eq=saturation={_num(1 - 0.25 * a)}")
+    if effect_id == "look_warm":
+        return f"colortemperature=temperature={round(6500 - 1800 * a)}"
+    if effect_id == "look_cool":
+        return f"colortemperature=temperature={round(6500 + 2800 * a)}"
+    if effect_id == "look_punchy":
+        return (f"eq=contrast={_num(1 + 0.15 * a)}:saturation={_num(1 + 0.28 * a)},"
+                f"unsharp=5:5:{_num(0.45 * a)}")
+    if effect_id == "look_mono":
+        return f"hue=s=0,eq=contrast={_num(1 + 0.25 * a)}"
+    if effect_id == "look_matte":
+        return (f"curves=all={_expr(f'0/{_num(0.09 * a)} 1/{_num(1 - 0.05 * a)}')},"
+                f"eq=saturation={_num(1 - 0.18 * a)}")
+    if effect_id == "vignette":
+        return f"vignette=angle={_num(0.25 + 0.5 * a)}"
+    if effect_id == "grain":
+        return f"noise=alls={round(4 + 22 * a)}:allf=t"
+    if effect_id == "sharpen":
+        return f"unsharp=5:5:{_num(1.5 * a)}"
+    if effect_id == "rgb_split":
+        shift = max(1, round(a * width / 150))
+        return f"rgbashift=rh={-shift}:bh={shift}"
+    if effect_id == "glow":
+        n = next(_LABELS)
+        return (f"split[glow{n}a][glow{n}b];[glow{n}b]gblur=sigma={_num(6 + 10 * a)}[glow{n}c];"
+                f"[glow{n}a][glow{n}c]blend=all_mode=screen:all_opacity={_num(0.2 + 0.35 * a)}")
+    if effect_id == "stabilize":
+        keep = 1 - 0.04 - 0.04 * a
+        search = 16 * (1 + round(3 * a))             # deshake needs a multiple of 16 (16..64)
+        return (f"deshake=rx={search}:ry={search},"
+                f"crop={_expr(f'iw*{_num(keep)}')}:{_expr(f'ih*{_num(keep)}')},scale={width}:{height}")
+    raise ValueError(f"unsupported effect: {effect_id}")

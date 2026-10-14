@@ -21,11 +21,13 @@ from pydantic import BaseModel, Field
 from poc.director.apply import TITLE_ASSET_ID, TITLE_CLIP_ID, TITLE_MS, apply_style
 from poc.director.brief import MAX_TITLE_CHARS, _normalise, _words_to_numbers
 from poc.director.footage import Footage, clip_tags, replace_sources, tags_in, tags_sentence
+from poc.director.style import (CALM_TRANSITIONS, ENERGETIC_TRANSITIONS, FAMILIES, STYLE_EFFECTS, accent_cuts, clear_style,
+                                guess_mood, look_effects, plan_style, set_transitions)
 from poc.perceive.shots import NEEDS_FACES, TAG_LABELS, TAG_SINGULAR
 from poc.timeline import EditorClip, EditorTimeline, EffectRef, MediaAsset, TransitionRef
 
 Intent = Literal["remove", "trim", "length", "transition", "look", "motion", "title", "undo", "redo",
-                 "explain", "retime", "unsupported", "unknown", "multiple", "footage", "describe"]
+                 "explain", "retime", "unsupported", "unknown", "multiple", "footage", "describe", "style"]
 
 MIN_CLIP_MS = 200
 FADE_MS = 400
@@ -45,7 +47,8 @@ class Operation(BaseModel):
     """One change. ``op`` decides which fields are used."""
 
     op: Literal["remove_clips", "trim_clip", "cut_range", "set_length", "set_transitions", "set_transition",
-                "adjust_look", "clear_look", "add_motion", "set_title", "remove_title", "replace_source"]
+                "adjust_look", "clear_look", "add_motion", "set_title", "remove_title", "replace_source",
+                "apply_style", "set_look", "add_effect", "style_transitions", "add_accents"]
     clip_ids: list[str] = Field(default_factory=list)
     side: Literal["start", "end"] | None = None
     ms: int | None = None
@@ -55,6 +58,10 @@ class Operation(BaseModel):
     amount: float | None = None
     text: str | None = None
     at: Literal["start", "end"] | None = None
+    style: str | None = None                           # apply_style: clean / auto / bold
+    look: str | None = None                            # apply_style / set_look: cinematic, vintage, ...
+    family: str | None = None                          # style_transitions: zoom, slide, glitch, ... or mix
+    scope: Literal["all", "accents"] | None = None     # style_transitions / add_accents: every cut or the strong beats
     tags: list[str] = Field(default_factory=list)      # replace_source: footage the new shots must show
     avoid: list[str] = Field(default_factory=list)     # replace_source: footage they must not show
 
@@ -243,6 +250,8 @@ def _numbers(indices: list[int]) -> str:
 def _footage_request(t: str, clips: list[EditorClip], refs: "_Refs", ids: list[str], footage: Footage | None,
                      pending: int):
     """Requests about what the footage shows. Returns (intent, ops, summary, questions, answer) or None."""
+    if re.search(r"\bstabili[sz]|\bsteady (?:it|them|the)\b|\bfix (?:the )?shak", t):
+        return None                                      # stabilising is the finishing pass's job
     tags = tags_in(t)
     describing = bool(re.search(r"\bwhat(?:'s| is| are)\b[^?]*\b(?:in|on)\b|\bwhat does\b[^?]*\bshow\b|"
                                 r"\bkya (?:hai|dikh)|\bdescribe\b|\bkaisa (?:hai|dikh)", t))
@@ -327,6 +336,102 @@ def _footage_request(t: str, clips: list[EditorClip], refs: "_Refs", ids: list[s
     return ("footage", [], [], [f"{_numbers(hits)[0].upper() + _numbers(hits)[1:]} {'is' if len(hits) == 1 else 'are'} "
                                 f"{label}. Do you want to keep only {label}, remove them, or replace them?"
                                 if hits else f"None of the clips are {label}."], None)
+
+
+_LOOK_WORDS = {"cinematic": "cinematic", "movie": "cinematic", "filmy": "cinematic", "vintage": "vintage",
+               "retro": "vintage", "old film": "vintage", "warm": "warm", "golden": "warm", "cool": "cool",
+               "cold": "cool", "blue": "cool", "punchy": "punchy", "vivid": "punchy", "matte": "matte",
+               "faded": "matte", "film": "matte"}
+_TEXTURES = [(r"\b(?:film )?grain\b|\bgrainy\b", "grain", "film grain"), (r"\bvignette\b", "vignette", "a vignette"),
+             (r"\bglow(?:ing|y)?\b|\bbloom\b|\bdreamy glow\b", "glow", "a soft glow"),
+             (r"\brgb split\b|\bchromatic\b|\bglitch (?:look|effect|style)\b", "rgb_split", "an RGB-split glitch look")]
+_FAMILY_WORDS = [(r"zoom(?:ing)?", "zoom"), (r"slid(?:e|es|ing)|push", "slide"), (r"wipes?", "wipe"),
+                 (r"whip|blur(?:ry)?|swish", "blur"), (r"glitch(?:y)?|pixel(?:ated|s|ize)?|digital", "glitch"),
+                 (r"circle|circular|iris|round", "circle"), (r"(?:white )?flash(?:y)?", "flash"),
+                 (r"(?:dip to )?black", "black"), (r"dissolve", "dissolve"),
+                 (r"mixed|different|cool|fancy|random|creative|stylish|nice|good|best|cinematic|varied", "mix")]
+_FAMILY_NAMES = {"zoom": "zoom", "slide": "slide", "wipe": "wipe", "blur": "whip-blur", "glitch": "glitch",
+                 "circle": "circle", "flash": "white-flash", "black": "dip-to-black", "dissolve": "dissolve",
+                 "mix": "mixed"}
+
+
+def _style_request(t: str, clips: list[EditorClip], ids: list[str], refs: "_Refs", scope_all: bool,
+                   scope_text: str, footage: Footage | None):
+    """Styles, looks, textures, transition families and beat accents. Returns
+    (intent, ops, summary, questions) or None."""
+    everywhere = bool(re.search(r"\b(?:all|every|each|har|sab|saare|sabhi)\b", t))
+    look = next((name for word, name in _LOOK_WORDS.items()
+                 if re.search(rf"\b{word}\s+(?:look|style|grade|grading|colou?rs?|feel|vibe|tone|filter)\b|"
+                              rf"\bmake it (?:look )?(?:more )?{word}\b|\b{word} (?:wala|jaisa)\b", t)), None)
+
+    # clean / remove everything the finishing pass adds
+    if re.search(r"\b(?:remove|clear|no|without|hatao|hata do|drop)\s+(?:all\s+)?(?:the\s+)?(?:styling|style)\b|"
+                 r"\bclean (?:it up|edit|cuts)\b|\bplain cuts\b|\bstart (?:clean|plain)\b", t) and not ids:
+        return "style", [Operation(op="apply_style", style="clean")], [
+            "Remove the transitions, camera moves, beat accents and looks; keep hard cuts on the beat."], []
+
+    # the whole finishing pass
+    if re.search(r"\b(?:style it|make it (?:look )?(?:pro|professional|better|awesome|amazing|fire|lit|viral|cool)|"
+                 r"add (?:some )?effects|auto(?:matic)? effects|effects (?:lagao|daalo|dalo|add karo)|jazz it up|"
+                 r"spice it up|polish it|finish it|edit (?:it )?like a pro|make it pop|style karo)\b", t):
+        bold = bool(re.search(r"\b(?:bold|crazy|lots of|more|zyada|jyada|heavy|extreme|max)\b", t))
+        style = "bold" if bold else "auto"
+        words = (f"{'Bold' if bold else 'Auto'} finishing pass: transitions on the strongest beats, beat accents, "
+                 f"slow camera moves" + (f" and a {look} look." if look else " and a colour look."))
+        return "style", [Operation(op="apply_style", style=style, look=look)], [words], []
+
+    # a colour look
+    if look:
+        target = [c.clip_id for c in clips] if scope_all else ids
+        return "style", [Operation(op="set_look", look=look, clip_ids=target)], [f"{look.capitalize()} look on {scope_text}."], []
+
+    # textures
+    for pattern, effect_id, label in _TEXTURES:
+        if re.search(pattern, t):
+            target = [c.clip_id for c in clips] if scope_all else ids
+            remove = bool(re.search(r"\b(?:remove|no|without|hatao|less)\b", t))
+            return "style", [Operation(op="add_effect", effect_id=effect_id, clip_ids=target, amount=0.0 if remove else 0.5)], [
+                f"{'Remove' if remove else 'Add'} {label} {'from' if remove else 'on'} {scope_text}."], []
+
+    # stabilise
+    if re.search(r"\b(?:stabili[sz]e|stabili[sz]ation|steady (?:it|them|the)|less shaky|fix (?:the )?shak(?:e|y|ing))", t):
+        target = ids
+        if not target:
+            shaky = [c for c in clips if footage and (tg := clip_tags(c, footage)) is not None and tg.shaky]
+            target = [c.clip_id for c in shaky] if shaky else [c.clip_id for c in clips]
+        numbers = [i for i, c in enumerate(clips, 1) if c.clip_id in target]
+        what = f"clip{'s' if len(numbers) > 1 else ''} {', '.join(map(str, numbers))}" if len(numbers) < len(clips) else "all clips"
+        return "style", [Operation(op="add_effect", effect_id="stabilize", clip_ids=target, amount=0.6)], [
+            f"Stabilise {what} (the picture gets slightly closer to hide the moving edges)."], []
+
+    # beat accents
+    accent = re.search(r"\b(flash(?:es)?|zoom punch(?:es)?|punch(?:es)?|beat zoom|zoom on (?:the )?beats?|shake|shakes)\b"
+                       r"[^.]*\b(?:beats?|drops?|bass|hits?)\b|\b(?:beat|drop) (flash|zoom|shake)", t)
+    if accent:
+        word = (accent.group(1) or accent.group(2) or "").lower()
+        effect_id = "flash" if "flash" in word else "shake" if "shake" in word else "zoom_punch"
+        scope = "all" if everywhere or re.search(r"\bevery beat|\bbeats\b", t) and "drop" not in t else "accents"
+        names = {"flash": "flashes", "shake": "camera shakes", "zoom_punch": "zoom punches"}
+        where = "on the downbeats" if scope == "all" else "on the strongest beats"
+        return "style", [Operation(op="add_accents", effect_id=effect_id, scope=scope)], [
+            f"Add {names[effect_id]} {where}."], []
+
+    # transition families: "zoom transitions", "glitch transitions on every cut", "different transitions"
+    if re.search(r"\btransitions?\b", t) and not re.search(r"\b(?:remove|delete|no|without|drop|hatao|hata do|"
+                                                          r"get rid of)\b", t):
+        family = next((name for pattern, name in _FAMILY_WORDS if re.search(rf"\b(?:{pattern})\b", t)), None)
+        if family is None and not re.search(r"\b(?:fade|fades|dissolve|smooth\w*|soft\w*)\b", t):
+            family = "mix"
+        if family and not ids:
+            scope = "all" if everywhere else "accents"
+            where = "every cut" if scope == "all" else "the strongest beats"
+            return "style", [Operation(op="style_transitions", family=family, scope=scope)], [
+                f"{_FAMILY_NAMES[family].capitalize()} transitions on {where}" +
+                ("; the rest stay hard cuts on the beat." if scope == "accents" else " (where the clips are long enough).")], []
+        if family and ids:
+            return "style", [Operation(op="style_transitions", family=family, scope="all", clip_ids=ids)], [
+                f"{_FAMILY_NAMES[family].capitalize()} transition into {scope_text}."], []
+    return None
 
 
 def parse_instructions(text: str, timeline: EditorTimeline, footage: Footage | None = None,
@@ -435,6 +540,12 @@ def parse_revision(text: str, timeline: EditorTimeline, footage: Footage | None 
         return result("title", [Operation(op="set_title", text=title_text, at=at)],
                       [f'Title "{title_text}" for {_seconds(min(TITLE_MS, _ms(timeline, timeline.duration_ticks)))} '
                        f"at the {at}."])
+
+    # 5b. the finishing pass: styles, looks, textures, transition families, beat accents
+    found = _style_request(t, clips, ids, refs, scope_all, scope_text, footage)
+    if found is not None:
+        intent, ops, summary, questions = found
+        return result(intent, ops, summary, questions=questions)
 
     # 6. transitions
     if re.search(r"\b(?:fade|fades|faded|crossfade|crossfades|dissolve|transition|transitions|cuts only|hard cuts|"
@@ -781,6 +892,72 @@ def apply_operations(timeline: EditorTimeline, operations: list[Operation],
         elif op.op == "remove_title":
             tl = tl.model_copy(update={"assets": [a for a in tl.assets if a.asset_id != TITLE_ASSET_ID],
                                        "clips": [c for c in tl.clips if c.clip_id != TITLE_CLIP_ID]})
+        elif op.op == "apply_style":
+            tl, style_notes = plan_style(tl, mood=guess_mood(tl), style=op.style or "auto", look=op.look,
+                                         footage=footage, transitions=True)
+            notes.extend(style_notes)
+        elif op.op == "set_look":
+            mood = guess_mood(tl)
+            looks = look_effects(op.look or "cinematic", mood, "auto")
+            targets = set(op.clip_ids) or {c.clip_id for c in clips}
+            updated = []
+            for c in tl.clips:
+                if c.clip_id in targets:
+                    kept = [e for e in c.effects if not e.effect_id.startswith("look_")
+                            and e.effect_id not in {x.effect_id for x in looks}]
+                    c = c.model_copy(update={"effects": kept + looks})
+                updated.append(c)
+            tl = tl.model_copy(update={"clips": updated})
+        elif op.op == "add_effect":
+            targets = set(op.clip_ids) or {c.clip_id for c in clips}
+            updated = []
+            for c in tl.clips:
+                if c.clip_id in targets:
+                    kept = [e for e in c.effects if e.effect_id != op.effect_id]
+                    if op.amount:
+                        kept.append(EffectRef(effect_id=op.effect_id, parameters={"amount": op.amount}))
+                    c = c.model_copy(update={"effects": kept})
+                updated.append(c)
+            tl = tl.model_copy(update={"clips": updated})
+        elif op.op == "style_transitions":
+            mood = guess_mood(tl)
+            pool = FAMILIES.get(op.family or "mix", ())
+            if op.family == "mix":
+                pool = ENERGETIC_TRANSITIONS if mood == "energetic" else CALM_TRANSITIONS
+            limit = 320 if mood == "energetic" else 650
+            if op.clip_ids:
+                indices = [i for i, c in enumerate(clips) if c.clip_id in op.clip_ids and i > 0]
+            elif op.scope == "all":
+                indices = list(range(1, len(clips)))
+            else:
+                indices = [c.index for c in accent_cuts(tl, mood, "auto")]
+            tl, placed = set_transitions(tl, indices, pool, limit)
+            if not placed:
+                raise ValueError("the clips are too short (or have no spare footage) for transitions there")
+            if placed < len(indices):
+                notes.append(f"Placed {placed} of {len(indices)}; the other clips are too short or have no spare footage.")
+        elif op.op == "add_accents":
+            mood = guess_mood(tl)
+            cuts = [c for c in accent_cuts(tl, mood, "bold" if op.scope == "all" else "auto")]
+            if op.scope == "all":
+                from poc.director.style import music_cuts
+                cuts = [c for c in music_cuts(tl) if c.downbeat] or cuts
+            by_id = {c.clip_id: c for c in tl.clips}
+            added = 0
+            for cut in cuts:
+                clip = clips[cut.index]
+                ms = _ms(tl, clip.duration_ticks)
+                params = {"at_ms": 0, "duration_ms": int(min(350 if op.effect_id != "shake" else 450, ms * 0.8)),
+                          "amount": 0.6}
+                current = by_id[clip.clip_id]
+                kept = [e for e in current.effects if e.effect_id != op.effect_id]
+                by_id[clip.clip_id] = current.model_copy(update={"effects": kept + [EffectRef(effect_id=op.effect_id,
+                                                                                               parameters=params)]})
+                added += 1
+            if not added:
+                raise ValueError("I could not find strong beats at the cuts")
+            tl = tl.model_copy(update={"clips": [by_id[c.clip_id] for c in tl.clips]})
+            notes.append(f"Added to {added} cut{'s' if added != 1 else ''}.")
         elif op.op == "replace_source":
             if not footage:
                 raise ValueError("the footage has not been looked at yet")
@@ -804,7 +981,7 @@ _NEUTRAL = {"brightness": 0.0, "contrast": 1.0, "saturation": 1.0, "blur": 0.0}
 
 def _look(effects: list[EffectRef], op: Operation) -> list[EffectRef]:
     if op.op == "clear_look":
-        drop = {op.effect_id} if op.effect_id else set(_LOOK_PARAM)
+        drop = {op.effect_id} if op.effect_id else set(_LOOK_PARAM) | STYLE_EFFECTS   # "remove all effects": all of them
         return [e for e in effects if e.effect_id not in drop]
     effect = op.effect_id or ""
     param = _LOOK_PARAM[effect]

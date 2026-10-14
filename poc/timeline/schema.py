@@ -190,11 +190,19 @@ TrackKind = Literal["video", "overlay", "audio", "music"]
 TransitionId = Literal[
     "cut", "fade", "dissolve", "dip_to_black", "dip_to_white",
     "wipe_left", "wipe_right", "wipe_up", "wipe_down",
+    # Phase 3: FFmpeg xfade transitions (no parameters)
+    "slide_left", "slide_right", "slide_up", "slide_down", "zoom_through", "blur_through",
+    "circle_open", "circle_close", "radial", "pixelize", "smooth_left", "smooth_right",
+    "squeeze", "slice", "wind", "diagonal", "fade_mono",
 ]
 EffectId = Literal[
     "fade_in", "fade_out", "zoom_in", "zoom_out",
     "pan_left", "pan_right", "pan_up", "pan_down",
     "brightness", "contrast", "saturation", "blur",
+    # Phase 3: looks, textures, beat accents, repair
+    "look_cinematic", "look_vintage", "look_warm", "look_cool", "look_punchy", "look_mono", "look_matte",
+    "vignette", "grain", "sharpen", "glow", "rgb_split",
+    "flash", "shake", "zoom_punch", "stabilize",
 ]
 
 
@@ -412,13 +420,30 @@ _WIPE_TRANSITION_SCHEMA = (_transition_field("softness", "number", default=0.0, 
 TRANSITION_CATALOGUE: tuple[TransitionMetadata, ...] = (
     TransitionMetadata(transition_id="cut", name="Cut", parameter_schema=(), duration_default_ticks=0, duration_min_ticks=0, duration_max_ticks=0, renderable=True, deterministic=True, behavior_contract="Instant boundary change with no overlap or generated frames."),
     TransitionMetadata(transition_id="fade", name="Fade", parameter_schema=_FADE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Linear or eased blend between outgoing and incoming scenes over duration_ticks."),
-    TransitionMetadata(transition_id="dissolve", name="Dissolve", parameter_schema=_DISSOLVE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Per-pixel dissolve using a fixed mask_seed and softness over duration_ticks."),
+    TransitionMetadata(transition_id="dissolve", name="Dissolve", parameter_schema=_DISSOLVE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Per-pixel dissolve using a fixed mask_seed and softness over duration_ticks."),
     TransitionMetadata(transition_id="dip_to_black", name="Dip to Black", parameter_schema=_DIP_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Fade outgoing scene to black then reveal incoming scene using peak_fraction and hold_fraction."),
-    TransitionMetadata(transition_id="dip_to_white", name="Dip to White", parameter_schema=_DIP_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Fade outgoing scene to white then reveal incoming scene using peak_fraction and hold_fraction."),
+    TransitionMetadata(transition_id="dip_to_white", name="Dip to White", parameter_schema=_DIP_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Fade outgoing scene to white then reveal incoming scene using peak_fraction and hold_fraction."),
     TransitionMetadata(transition_id="wipe_left", name="Wipe Left", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic left-moving boundary over duration_ticks."),
-    TransitionMetadata(transition_id="wipe_right", name="Wipe Right", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic right-moving boundary over duration_ticks."),
-    TransitionMetadata(transition_id="wipe_up", name="Wipe Up", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic upward-moving boundary over duration_ticks."),
-    TransitionMetadata(transition_id="wipe_down", name="Wipe Down", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=False, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic downward-moving boundary over duration_ticks."),
+    TransitionMetadata(transition_id="wipe_right", name="Wipe Right", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic right-moving boundary over duration_ticks."),
+    TransitionMetadata(transition_id="wipe_up", name="Wipe Up", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic upward-moving boundary over duration_ticks."),
+    TransitionMetadata(transition_id="wipe_down", name="Wipe Down", parameter_schema=_WIPE_TRANSITION_SCHEMA, duration_default_ticks=500, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Reveal incoming scene with a deterministic downward-moving boundary over duration_ticks."),
+    TransitionMetadata(transition_id="slide_left", name="Slide Left", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="The incoming scene slides in from the right, pushing nothing; the outgoing scene stays."),
+    TransitionMetadata(transition_id="slide_right", name="Slide Right", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="The incoming scene slides in from the left."),
+    TransitionMetadata(transition_id="slide_up", name="Slide Up", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="The incoming scene slides in from the bottom."),
+    TransitionMetadata(transition_id="slide_down", name="Slide Down", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="The incoming scene slides in from the top."),
+    TransitionMetadata(transition_id="zoom_through", name="Zoom Through", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="The outgoing scene zooms toward the viewer and gives way to the incoming scene."),
+    TransitionMetadata(transition_id="blur_through", name="Blur Through", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="A fast horizontal blur hides the cut, like a whip pan."),
+    TransitionMetadata(transition_id="circle_open", name="Circle Open", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="The incoming scene opens from a growing circle in the centre."),
+    TransitionMetadata(transition_id="circle_close", name="Circle Close", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="The outgoing scene closes into a shrinking circle."),
+    TransitionMetadata(transition_id="radial", name="Radial", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="A clock-hand sweep reveals the incoming scene."),
+    TransitionMetadata(transition_id="pixelize", name="Pixelize", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Both scenes break into blocks and reassemble."),
+    TransitionMetadata(transition_id="smooth_left", name="Soft Wipe Left", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="A wipe to the left with a soft edge."),
+    TransitionMetadata(transition_id="smooth_right", name="Soft Wipe Right", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="A wipe to the right with a soft edge."),
+    TransitionMetadata(transition_id="squeeze", name="Squeeze", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="The outgoing scene squeezes away horizontally."),
+    TransitionMetadata(transition_id="slice", name="Slice", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Horizontal slices reveal the incoming scene."),
+    TransitionMetadata(transition_id="wind", name="Wind", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="The outgoing scene blows away in streaks."),
+    TransitionMetadata(transition_id="diagonal", name="Diagonal Wipe", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="A diagonal wipe from the top-left corner."),
+    TransitionMetadata(transition_id="fade_mono", name="Fade Through Grey", parameter_schema=(), duration_default_ticks=400, duration_min_ticks=1, duration_max_ticks=30000, renderable=True, deterministic=True, behavior_contract="Both scenes lose their colour during the blend."),
 )
 
 
@@ -486,6 +511,18 @@ class BlurParameters(_Strict):
     radius: float = Field(ge=0.0, le=50.0)
 
 
+class AmountParameters(_Strict):
+    """Strength of a look, texture or repair effect (0 = none, 1 = strong)."""
+    amount: float = Field(default=0.6, ge=0.0, le=1.0)
+
+
+class AccentParameters(_Strict):
+    """A short accent (flash, shake, zoom punch) at at_ms from the start of the clip."""
+    at_ms: int = Field(default=0, ge=0, le=600000)
+    duration_ms: int = Field(default=300, ge=1, le=5000)
+    amount: float = Field(default=0.6, ge=0.0, le=1.0)
+
+
 EffectParameters = (
     FadeParameters
     | ZoomInParameters
@@ -495,6 +532,8 @@ EffectParameters = (
     | ContrastParameters
     | SaturationParameters
     | BlurParameters
+    | AmountParameters
+    | AccentParameters
 )
 
 
@@ -552,6 +591,10 @@ _EFFECT_PARAMETER_MODELS: dict[str, type[BaseModel]] = {
     "contrast": ContrastParameters,
     "saturation": SaturationParameters,
     "blur": BlurParameters,
+    **{effect_id: AmountParameters for effect_id in (
+        "look_cinematic", "look_vintage", "look_warm", "look_cool", "look_punchy", "look_mono", "look_matte",
+        "vignette", "grain", "sharpen", "glow", "rgb_split", "stabilize")},
+    **{effect_id: AccentParameters for effect_id in ("flash", "shake", "zoom_punch")},
 }
 
 
@@ -599,6 +642,22 @@ EFFECT_CATALOGUE: tuple[EffectMetadata, ...] = (
     EffectMetadata(effect_id="contrast", name="Contrast", parameter_schema=(_field_definition("factor", "number", default=1.0, minimum=0.0, maximum=3.0),), renderable=True, deterministic=True, behavior_contract="Apply a constant contrast multiplier factor."),
     EffectMetadata(effect_id="saturation", name="Saturation", parameter_schema=(_field_definition("factor", "number", default=1.0, minimum=0.0, maximum=3.0),), renderable=True, deterministic=True, behavior_contract="Apply a constant saturation multiplier factor."),
     EffectMetadata(effect_id="blur", name="Blur", parameter_schema=(_field_definition("radius", "number", required=True, minimum=0.0, maximum=50.0),), renderable=True, deterministic=True, behavior_contract="Apply a constant blur radius in pixels."),
+    EffectMetadata(effect_id="look_cinematic", name="Cinematic Look", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Teal shadows and warm highlights with a little extra contrast; amount scales the grade."),
+    EffectMetadata(effect_id="look_vintage", name="Vintage Look", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Lifted, tinted blacks, softer whites and less saturation, like old film."),
+    EffectMetadata(effect_id="look_warm", name="Warm Look", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Lower colour temperature (golden light)."),
+    EffectMetadata(effect_id="look_cool", name="Cool Look", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Higher colour temperature (blue light)."),
+    EffectMetadata(effect_id="look_punchy", name="Punchy Look", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="More contrast and saturation with light sharpening."),
+    EffectMetadata(effect_id="look_mono", name="Black and White Look", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Black and white with extra contrast."),
+    EffectMetadata(effect_id="look_matte", name="Matte Look", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Lifted blacks and softened colour, a flat film look."),
+    EffectMetadata(effect_id="vignette", name="Vignette", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Darkens the corners to draw the eye to the centre."),
+    EffectMetadata(effect_id="grain", name="Film Grain", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Moving film grain."),
+    EffectMetadata(effect_id="sharpen", name="Sharpen", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Unsharp-mask sharpening."),
+    EffectMetadata(effect_id="glow", name="Glow", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Bright areas bloom softly (screen-blended blur)."),
+    EffectMetadata(effect_id="rgb_split", name="RGB Split", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Red and blue channels pulled apart horizontally, a glitch look."),
+    EffectMetadata(effect_id="flash", name="Flash", parameter_schema=(_field_definition("at_ms", "integer", default=0, minimum=0, maximum=600000), _field_definition("duration_ms", "integer", default=300, minimum=1, maximum=5000), _field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0)), renderable=True, deterministic=True, behavior_contract="The picture flashes bright at at_ms and fades back over duration_ms."),
+    EffectMetadata(effect_id="shake", name="Shake", parameter_schema=(_field_definition("at_ms", "integer", default=0, minimum=0, maximum=600000), _field_definition("duration_ms", "integer", default=300, minimum=1, maximum=5000), _field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0)), renderable=True, deterministic=True, behavior_contract="The camera shakes around at_ms for duration_ms (picture slightly enlarged to hide edges)."),
+    EffectMetadata(effect_id="zoom_punch", name="Zoom Punch", parameter_schema=(_field_definition("at_ms", "integer", default=0, minimum=0, maximum=600000), _field_definition("duration_ms", "integer", default=300, minimum=1, maximum=5000), _field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0)), renderable=True, deterministic=True, behavior_contract="The picture jumps closer at at_ms and settles back over duration_ms."),
+    EffectMetadata(effect_id="stabilize", name="Stabilize", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Reduces camera shake (FFmpeg deshake) and enlarges slightly to hide moving edges."),
 )
 
 

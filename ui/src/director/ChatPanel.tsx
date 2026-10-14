@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api, Asset, json, Project } from '../api';
-import type { AutoEditRequest } from '../timeline/AutoEditDialog';
+import { LOOK_NAMES, STYLE_NAMES } from '../timeline/AutoEditDialog';
+import type { AutoEditRequest, EditStyle } from '../timeline/AutoEditDialog';
 import type { BriefResponse } from '../timeline/brief';
 import type { Timeline } from '../timeline/ops';
 import { clipNumbers, planRevision, RevisionResponse } from '../timeline/revise';
@@ -34,7 +35,7 @@ const MAX_CHARS = 500;
 const PROFILE_NAMES: Record<string, string> = {
   reels_9x16: 'Vertical 9:16', youtube_1080p: 'Landscape 16:9', square_1x1: 'Square 1:1', preview_540p: 'Preview 540p',
 };
-const TRANSITION_NAMES = { auto: 'Cuts', cuts_only: 'Cuts only', soft: 'Soft fades' } as const;
+const TRANSITION_NAMES = { auto: 'Automatic', cuts_only: 'Cuts only', soft: 'Soft fades' } as const;
 
 /** The Director as a conversation: ask, see what would change, then Apply — every change is undoable. */
 export function ChatPanel(props: Props) {
@@ -197,6 +198,12 @@ export function ChatPanel(props: Props) {
           <dt>Mood</dt><dd className="cap">{settings.mood}</dd>
           <dt>Videos</dt><dd>{settings.videoAssetIds.length} of {assets.filter(a => a.kind === 'video').length}</dd>
           <dt>Transitions</dt><dd>{TRANSITION_NAMES[settings.transitionPolicy]}</dd>
+          <dt>Style</dt><dd>{m.status === 'pending'
+            ? <select aria-label="Style" value={settings.style ?? 'auto'} onChange={e => change({ style: e.target.value as EditStyle })}>
+                {(Object.keys(STYLE_NAMES) as EditStyle[]).map(key => <option key={key} value={key}>{STYLE_NAMES[key]}</option>)}</select>
+            : STYLE_NAMES[settings.style ?? 'auto']}</dd>
+          {settings.look && <><dt>Look</dt><dd>{LOOK_NAMES[settings.look] ?? settings.look}</dd></>}
+          {settings.transitionFamily && <><dt>Accents</dt><dd className="cap-first">{settings.transitionFamily} transitions</dd></>}
           {!!settings.preferTags?.length && <><dt>Shots</dt><dd className="cap-first">{tagNames(settings.preferTags)}</dd></>}
           {!!settings.avoidTags?.length && <><dt>Leave out</dt><dd className="cap-first">{tagNames(settings.avoidTags)}</dd></>}
           {settings.title && <><dt>Title</dt><dd>“{settings.title}”</dd></>}

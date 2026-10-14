@@ -37,11 +37,12 @@ describe('brief card', () => {
     const m = briefReply(brief(), assets);
     expect(m.kind).toBe('brief');
     expect(m.brief).toEqual({ musicAssetId: 'song', mood: 'energetic', durationS: 20, videoAssetIds: ['v1', 'v2'],
-      transitionPolicy: 'soft', title: 'Goa', profile: 'reels_9x16', preferTags: [], avoidTags: [] });
+      transitionPolicy: 'soft', title: 'Goa', profile: 'reels_9x16', preferTags: [], avoidTags: [],
+      style: 'auto', look: null, transitionFamily: null });
     expect(m.lines).toEqual([]);                      // understood items are the settings table
     expect(briefReady(m.brief!)).toBe(true);
     expect(briefRequest(m.brief!)).toEqual({ musicAssetId: 'song', mood: 'energetic', durationS: 20,
-      videoAssetIds: ['v1', 'v2'], transitionPolicy: 'soft', title: 'Goa' });
+      videoAssetIds: ['v1', 'v2'], transitionPolicy: 'soft', title: 'Goa', style: 'auto', look: null, transitionFamily: null });
   });
   it('asks for a song when there is none', () => {
     const m = briefReply(brief(), [asset('v1', 'video')]);
@@ -122,5 +123,14 @@ describe('shot preferences', () => {
     expect(m.brief).toMatchObject({ preferTags: ['close-up'], avoidTags: ['dark'] });
     expect(briefRequest(m.brief!).shots).toEqual({ prefer: ['close-up'], avoid: ['dark'] });
     expect(briefRequest(briefReply(brief(), assets).brief!).shots).toBeUndefined();
+  });
+});
+
+describe('finishing pass settings', () => {
+  it('a brief that names a style, look and transitions sends them with the auto-edit', () => {
+    const m = briefReply(brief({ brief: { style: 'bold', look: 'cinematic', transition_family: 'zoom' } }), assets);
+    expect(briefRequest(m.brief!)).toMatchObject({ style: 'bold', look: 'cinematic', transitionFamily: 'zoom' });
+    const next = briefReply(brief({ brief: { style: null, look: null, transition_family: null } }), assets, m.brief);
+    expect(next.brief).toMatchObject({ style: 'bold', look: 'cinematic' });      // kept from the earlier brief
   });
 });

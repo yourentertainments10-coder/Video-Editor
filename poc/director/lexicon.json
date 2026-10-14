@@ -169,8 +169,6 @@
   "unsupported": {
     "slow motion": "slow motion on a clip comes with revisions (LD-2)",
     "slowmo": "slow motion on a clip comes with revisions (LD-2)",
-    "black and white": "colour looks are not part of briefs yet",
-    "vintage": "colour looks are not part of briefs yet",
     "subtitles": "subtitles are not supported yet",
     "voiceover": "voice-over is not supported yet",
     "voice over": "voice-over is not supported yet"

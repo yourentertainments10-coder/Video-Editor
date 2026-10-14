@@ -86,6 +86,31 @@ clear "I don't understand X; try one of: …" instead of a guess.
   width); tiny faces in wide crowd shots count as "no faces". OpenCV 5 moved the cascades
   out, so the project pins `opencv-python-headless>=4.9,<5`; the self-check reports it.
 
+## Implementation status (finishing pass, phase 3a)
+
+- Catalogues: 26 transitions (all renderable; the new ones are FFmpeg `xfade` built-ins: slides,
+  zoom-through, blur-through (whip), circle open/close, radial, pixelize, soft wipes, squeeze,
+  slice, wind, diagonal, fade through grey, dissolve, dip to white, wipes) and 28 effects: looks
+  (cinematic, vintage, warm, cool, punchy, black and white, matte), textures (vignette, grain,
+  sharpen, glow, RGB split), beat accents (flash, shake, zoom punch at a moment in the clip) and
+  stabilise (FFmpeg `deshake`). Each has typed parameters; the Director never writes FFmpeg.
+- `poc/director/style.py` (`plan_style`): the editor's finishing pass. Most cuts stay hard cuts on
+  the beat; transitions go on strong or rising downbeats, spaced apart (3.5 s energetic, 5.5 s
+  calm; bold about half that), never the same one twice in a row, and only where both clips are
+  long enough and have spare footage. Energetic: short punchy transitions, zoom punches on strong
+  beats, a flash (and in bold a shake) on the biggest build-up. Calm: longer soft transitions and
+  slow push-ins/pans. Shaky footage is stabilised, dark footage lifted, and every clip gets a look.
+  Re-styling replaces what the pass added; user effects with other ids stay.
+- Auto-edit: `style` = clean | auto | bold (API default clean; the app sends auto), `look`,
+  `transition_family` (zoom, slide, glitch, blur, circle, flash, wipe, ...).
+- Chat: "make it look pro" / "effects lagao" / "with lots of effects", "cinematic look",
+  "vintage look", "add film grain", "add a vignette to clip 3", "add zoom transitions",
+  "glitch transitions on every cut", "different transitions", "flash on the beat drops",
+  "zoom punch on every beat", "stabilize the shaky clips", "clean it up, plain cuts".
+  Briefs understand the same words ("20 second reel with glitch transitions, bold effects,
+  cinematic look").
+- The self-check runs every effect and transition through the bundled FFmpeg.
+
 ## 2. Components
 
 ```

@@ -349,6 +349,8 @@ function App() {
         duration_s: request.durationS, video_asset_ids: request.videoAssetIds,
         transition_policy: request.transitionPolicy, ...(request.title ? { title: request.title } : {}),
         ...(request.shots ? { shots: request.shots } : {}),
+        style: request.style ?? 'auto', ...(request.look ? { look: request.look } : {}),
+        ...(request.transitionFamily ? { transition_family: request.transitionFamily } : {}),
       }));
       setJob({ job_id: result.job_id, status: 'queued', progress: 0, message: 'Queued', output: null, report: null, error: null });
       setAutoEditStatus({ status: 'queued', progress: 0, message: 'Queued', error: null });

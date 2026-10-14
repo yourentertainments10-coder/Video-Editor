@@ -18,7 +18,17 @@ from poc.timeline import MediaAsset
 from poc.render._process import run_ffmpeg_atomic
 
 
-_KINDS = {"cut", "crossfade", "fade_black", "wipe_left", "slide_left"}
+# join kind -> FFmpeg xfade transition (frame-centred overlap of the two clips)
+XFADE = {
+    "crossfade": "fade", "wipe_left": "wipeleft", "slide_left": "slideleft",
+    "wipe_right": "wiperight", "wipe_up": "wipeup", "wipe_down": "wipedown",
+    "slide_right": "slideright", "slide_up": "slideup", "slide_down": "slidedown",
+    "dissolve": "dissolve", "fade_white": "fadewhite", "zoom_through": "zoomin", "blur_through": "hblur",
+    "circle_open": "circleopen", "circle_close": "circleclose", "radial": "radial", "pixelize": "pixelize",
+    "smooth_left": "smoothleft", "smooth_right": "smoothright", "squeeze": "squeezeh", "slice": "hlslice",
+    "wind": "hlwind", "diagonal": "diagtl", "fade_mono": "fadegrays",
+}
+_KINDS = {"cut", "fade_black", *XFADE}
 
 
 @dataclass(frozen=True)
@@ -160,15 +170,8 @@ def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int,
             offset_frames = elapsed_frames - half
             duration = _seconds(frames / fps)
             offset = _seconds(offset_frames / fps)
-            if join.kind == "crossfade":
-                transition = "fade"
-                opts = ""
-            elif join.kind == "wipe_left":
-                transition = "wipeleft"
-                opts = ""
-            elif join.kind == "slide_left":
-                transition = "slideleft"
-                opts = ""
+            transition = XFADE[join.kind]
+            opts = ""
             graph.append(
                 f"[{current}][{next_label}]xfade=transition={transition}:"
                 f"duration={duration}:offset={offset}{opts}[{out_label}]"

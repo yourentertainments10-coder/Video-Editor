@@ -57,6 +57,10 @@ def test_01_transition_ids_are_unique():
     assert ids == [
         "cut", "fade", "dissolve", "dip_to_black", "dip_to_white",
         "wipe_left", "wipe_right", "wipe_up", "wipe_down",
+        # Phase 3 (catalogue list updated with the owner's approval)
+        "slide_left", "slide_right", "slide_up", "slide_down", "zoom_through", "blur_through",
+        "circle_open", "circle_close", "radial", "pixelize", "smooth_left", "smooth_right",
+        "squeeze", "slice", "wind", "diagonal", "fade_mono",
     ]
 
 
@@ -178,7 +182,7 @@ def test_transition_duration_is_limited_by_both_adjacent_clips():
 
 
 def test_catalogue_exposes_renderability_and_behavior_contracts():
-    RENDERABLE_NOW = {"cut", "fade", "dip_to_black", "wipe_left"}
+    RENDERABLE_NOW = {i.transition_id for i in TRANSITION_CATALOGUE}   # Phase 3: all render (owner-approved)
     assert {i.transition_id for i in TRANSITION_CATALOGUE if i.renderable} == RENDERABLE_NOW
     assert all(item.deterministic for item in TRANSITION_CATALOGUE)
     assert get_transition_metadata("cut").name == "Cut"

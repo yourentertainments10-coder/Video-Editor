@@ -46,6 +46,9 @@ class CreativeBrief(BaseModel):
     title: str | None = None
     only_asset_ids: list[str] = Field(default_factory=list)
     exclude_asset_ids: list[str] = Field(default_factory=list)
+    style: Literal["clean", "auto", "bold"] | None = None  # finishing pass (poc.director.style); None: not said
+    look: str | None = None                                # colour look: cinematic, vintage, warm, cool, ...
+    transition_family: str | None = None                   # "zoom", "slide", "glitch", ... for the accents
     prefer_tags: list[str] = Field(default_factory=list)   # footage to use ("close-up", ...; poc.perceive.shots)
     avoid_tags: list[str] = Field(default_factory=list)    # footage to keep out ("dark", "shaky", ...)
 
@@ -190,6 +193,47 @@ def parse_brief(text: str, assets: Sequence[AssetRef] = ()) -> BriefResult:
             result.understood.append(f"Only using: {asset.file_name}")
         else:
             result.defaults.append(f"{asset.file_name} is already used (all videos are used unless you say 'only' or 'skip').")
+    masked = "".join(" " if any(s <= i < e for s, e in consumed) else ch for i, ch in enumerate(masked))
+
+    # --- finishing pass: looks, effects, transition families (poc.director.style)
+    look_words = {"cinematic": "cinematic", "movie": "cinematic", "vintage": "vintage", "retro": "vintage",
+                  "warm": "warm", "golden": "warm", "cool": "cool", "cold": "cool", "punchy": "punchy",
+                  "vivid": "punchy", "matte": "matte", "film": "matte", "black and white": "mono", "b&w": "mono",
+                  "monochrome": "mono"}
+    for m in re.finditer(r"\b(cinematic|movie|vintage|retro|warm|golden|cool|cold|punchy|vivid|matte|film|"
+                         r"black and white|b&w|monochrome)(?:\s+(?:look|style|grade|grading|feel|vibe|tone|"
+                         r"colou?rs?|filter))?(?=\W|$)", masked):
+        standalone = m.group(1) in ("vintage", "retro", "black and white", "b&w", "monochrome")
+        if m.group(0) != m.group(1) or standalone:
+            brief.look = look_words[m.group(1)]
+            consumed.append(m.span())
+            result.understood.append(f"Look: {brief.look} (from '{m.group(0)}')")
+            break
+    families = {"zoom": "zoom", "zooming": "zoom", "slide": "slide", "sliding": "slide", "glitch": "glitch",
+                "glitchy": "glitch", "whip": "blur", "blur": "blur", "circle": "circle", "flash": "flash",
+                "wipe": "wipe", "dissolve": "dissolve"}
+    fam = re.search(r"\b(zoom|zooming|slide|sliding|glitch|glitchy|whip|blur|circle|flash|wipe)\s+transitions?\b", masked)
+    if fam:
+        brief.transition_family = families[fam.group(1)]
+        consumed.append(fam.span())
+        result.understood.append(f"Transitions: {fam.group(1)} on the strongest beats")
+    clean = re.search(r"\b(?:no effects|without effects|clean cuts|clean edit|minimal|simple cuts|plain cuts|"
+                      r"just cuts and music)\b", masked)
+    bold = re.search(r"\b(?:(?:bold|crazy|flashy|wild|heavy|full|max|maximum|extra|lots of|many|more)\s+effects|"
+                     r"bold|crazy|flashy|wild)\b", masked)
+    auto = re.search(r"\b(?:with effects|effects|stylish|professional|pro edit|like a pro|polished)\b", masked)
+    if clean and not bold:
+        brief.style = "clean"
+        consumed.append(clean.span())
+        result.understood.append("Style: clean (hard cuts, no effects)")
+    elif bold:
+        brief.style = "bold"
+        consumed.append(bold.span())
+        result.understood.append("Style: bold (more transitions and beat effects)")
+    elif auto:
+        brief.style = "auto"
+        consumed.append(auto.span())
+        result.understood.append("Style: transitions and effects on the strongest beats")
     masked = "".join(" " if any(s <= i < e for s, e in consumed) else ch for i, ch in enumerate(masked))
 
     # --- unsupported phrases: say so instead of silently ignoring them

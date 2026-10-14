@@ -302,7 +302,9 @@ def test_non_renderable_transition_is_rejected_without_mutating_source_ranges(tm
     library, assets = _project(tmp_path, first, second)
     a, b = assets[first.name], assets[second.name]
     incoming = _visual_clip("second", b, "video", 1000, 1000, 200, 1200).model_copy(
-        update={"transition": TransitionRef(transition_id="wipe_right", duration_ticks=100)}
+        # Phase 3: every transition renders; a soft-edged wipe still does not (owner-approved update)
+        update={"transition": TransitionRef(transition_id="wipe_right", duration_ticks=100,
+                                            parameters={"softness": 0.2})}
     )
     timeline = _timeline([a, b], [
         _visual_clip("first", a, "video", 0, 1000, 0, 1000), incoming,

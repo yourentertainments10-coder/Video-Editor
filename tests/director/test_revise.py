@@ -18,7 +18,7 @@ NUMBER = {c.clip_id: i for i, c in enumerate(video_clips(TL), 1)}
 def _normalise(op) -> dict:
     d = op.model_dump()
     out = {"op": d["op"], "clips": [NUMBER[c] for c in d["clip_ids"]]}
-    for key in ("side", "ms", "policy", "transition", "effect_id", "text", "at"):
+    for key in ("side", "ms", "policy", "transition", "effect_id", "text", "at", "style", "look", "family", "scope"):
         if d[key] is not None:
             out[key] = d[key]
     if d["amount"] is not None:

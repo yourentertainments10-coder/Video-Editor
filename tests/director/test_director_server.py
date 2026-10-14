@@ -262,3 +262,49 @@ def test_footage_endpoint_and_shot_validation(client):
     r = client.post(f"/api/projects/{pid}/auto-edit", json={"base_revision": rev, "music_asset_id": music,
                     "mood": "calm", "duration_s": 3, "shots": {"prefer": ["sunsets"]}})
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------- Phase 3: style
+
+@pytest.mark.parametrize("mood,style,look", [("energetic", "bold", None), ("calm", "auto", "vintage")])
+def test_styled_auto_edit_renders_and_verifies(client, mood, style, look):
+    pid, assets = _project(client)
+    rev = client.get(f"/api/projects/{pid}/timeline").json()["revision"]
+    body = {"base_revision": rev, "music_asset_id": assets["synth_128.wav"]["asset_id"], "mood": mood,
+            "duration_s": 10, "style": style, **({"look": look} if look else {})}
+    job = _wait(client, client.post(f"/api/projects/{pid}/auto-edit", json=body).json()["job_id"])
+    assert job["status"] == "done", job
+    tl = client.get(f"/api/projects/{pid}/timeline").json()["timeline"]
+    video = [c for c in tl["clips"] if c["track_id"] == "video"]
+    effects = {e["effect_id"] for c in video for e in c["effects"]}
+    assert f"look_{look or ('cinematic' if style == 'bold' else 'warm')}" in effects
+    assert client.post(f"/api/projects/{pid}/check").json() == {"ok": True, "error": None}
+    render = _wait(client, client.post(f"/api/projects/{pid}/render", json={"profile": "preview_540p"}).json()["job_id"])
+    assert render["status"] == "done", render
+    assert render["report"]["ok"] is True, render["report"]["problems"]
+
+
+def test_style_options_are_validated(client):
+    pid, assets = _project(client)
+    rev = client.get(f"/api/projects/{pid}/timeline").json()["revision"]
+    base = {"base_revision": rev, "music_asset_id": assets["synth_128.wav"]["asset_id"], "mood": "calm", "duration_s": 3}
+    assert client.post(f"/api/projects/{pid}/auto-edit", json={**base, "style": "crazy"}).status_code == 422
+    assert client.post(f"/api/projects/{pid}/auto-edit", json={**base, "look": "sunset"}).status_code == 422
+
+
+def test_transition_family_from_a_brief(client):
+    pid, assets = _project(client)
+    brief = client.post(f"/api/projects/{pid}/brief", json={"text": "10 second reel with zoom transitions"}).json()["brief"]
+    assert brief["transition_family"] == "zoom"
+    rev = client.get(f"/api/projects/{pid}/timeline").json()["revision"]
+    job = _wait(client, client.post(f"/api/projects/{pid}/auto-edit", json={
+        "base_revision": rev, "music_asset_id": assets["synth_128.wav"]["asset_id"], "mood": "energetic",
+        "duration_s": 10, "style": "auto", "transition_family": "zoom"}).json()["job_id"])
+    assert job["status"] == "done", job
+    tl = client.get(f"/api/projects/{pid}/timeline").json()["timeline"]
+    ids = {c["transition"]["transition_id"] for c in tl["clips"] if c["track_id"] == "video" and c.get("transition")}
+    assert ids <= {"zoom_through"}
+    rev = client.get(f"/api/projects/{pid}/timeline").json()["revision"]
+    assert client.post(f"/api/projects/{pid}/auto-edit", json={
+        "base_revision": rev, "music_asset_id": assets["synth_128.wav"]["asset_id"], "mood": "calm",
+        "duration_s": 3, "transition_family": "sparkle"}).status_code == 422

@@ -7,6 +7,15 @@ export type AutoEditRequest = {
   transitionPolicy: TransitionPolicy; title: string | null;
   /** footage the edit should prefer / leave out (tags from the Director, e.g. 'close-up', 'dark') */
   shots?: { prefer: string[]; avoid: string[] };
+  /** finishing pass: transitions on strong beats, beat accents, camera moves and a colour look */
+  style?: EditStyle; look?: string | null; transitionFamily?: string | null;
+};
+export type EditStyle = 'clean' | 'auto' | 'bold';
+export const LOOK_NAMES: Record<string, string> = {
+  cinematic: 'Cinematic', vintage: 'Vintage', warm: 'Warm', cool: 'Cool', punchy: 'Punchy', matte: 'Matte', mono: 'Black and white',
+};
+export const STYLE_NAMES: Record<EditStyle, string> = {
+  auto: 'Auto effects (recommended)', bold: 'Bold effects', clean: 'Clean cuts, no effects',
 };
 
 type Props = {
@@ -39,6 +48,9 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
   const [briefQuestions, setBriefQuestions] = useState<string[]>([]);
   const [readingBrief, setReadingBrief] = useState(false);
   const [shots, setShots] = useState<{ prefer: string[]; avoid: string[] } | null>(null);
+  const [style, setStyle] = useState<EditStyle>('auto');
+  const [look, setLook] = useState<string>('');
+  const [family, setFamily] = useState<string | null>(null);
 
   const readBrief = async () => {
     if (!briefText.trim()) return;
@@ -51,6 +63,9 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
       if (out.profile) onProfile(out.profile);
       const prefer = response.brief.prefer_tags ?? [], avoid = response.brief.avoid_tags ?? [];
       setShots(prefer.length || avoid.length ? { prefer, avoid } : null);
+      if (response.brief.style) setStyle(response.brief.style);
+      if (response.brief.look) setLook(response.brief.look);
+      setFamily(response.brief.transition_family ?? null);
       setBriefNotes(out.notes); setBriefQuestions(out.questions);
     } catch (e) {
       setBriefNotes([]); setBriefQuestions([e instanceof Error ? e.message : String(e)]);
@@ -59,6 +74,7 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
   const request = (): AutoEditRequest => ({
     musicAssetId, mood, durationS, videoAssetIds: [...selectedVideos], transitionPolicy, title: title.trim() || null,
     ...(shots ? { shots } : {}),
+    style, look: look || null, transitionFamily: family,
   });
 
   return <div className="modal-backdrop" role="presentation">
@@ -88,6 +104,13 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
       <label>Transitions<select aria-label="Transitions" value={transitionPolicy} disabled={active}
         onChange={event => setTransitionPolicy(event.target.value as TransitionPolicy)}>
         <option value="auto">Automatic (cuts)</option><option value="cuts_only">Cuts only</option><option value="soft">Soft fades</option>
+      </select></label>
+      <label>Style<select aria-label="Style" value={style} disabled={active} onChange={event => setStyle(event.target.value as EditStyle)}>
+        {(Object.keys(STYLE_NAMES) as EditStyle[]).map(key => <option key={key} value={key}>{STYLE_NAMES[key]}</option>)}
+      </select></label>
+      <label>Look<select aria-label="Look" value={look} disabled={active} onChange={event => setLook(event.target.value)}>
+        <option value="">{style === 'clean' ? 'None' : 'Automatic for the mood'}</option>
+        {Object.entries(LOOK_NAMES).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
       </select></label>
       <label>Title (optional)<input aria-label="Title" maxLength={80} value={title} disabled={active}
         onChange={event => setTitle(event.target.value)}/></label>

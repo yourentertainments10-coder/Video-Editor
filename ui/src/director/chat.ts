@@ -17,6 +17,7 @@ export type BriefSettings = {
   musicAssetId: string | null; mood: Mood; durationS: number; videoAssetIds: string[];
   transitionPolicy: TransitionPolicy; title: string | null; profile: string | null;
   preferTags?: string[]; avoidTags?: string[];
+  style?: 'clean' | 'auto' | 'bold'; look?: string | null; transitionFamily?: string | null;
 };
 
 /** Footage words the Director uses (tags from poc/perceive/shots.py). */
@@ -89,6 +90,9 @@ export function briefReply(response: BriefResponse, assets: Asset[], previous?: 
     mood: b.mood ?? previous?.mood ?? 'energetic',
     durationS: b.duration_s ?? previous?.durationS ?? DEFAULT_DURATION_S,
     preferTags: b.prefer_tags?.length ? [...b.prefer_tags] : previous?.preferTags ?? [],
+    style: b.style ?? previous?.style ?? 'auto',
+    look: b.look ?? previous?.look ?? null,
+    transitionFamily: b.transition_family ?? previous?.transitionFamily ?? null,
     avoidTags: b.avoid_tags?.length ? [...b.avoid_tags] : previous?.avoidTags ?? [],
     videoAssetIds: response.video_asset_ids.length ? [...response.video_asset_ids] : videos.map(v => v.asset_id),
     transitionPolicy: b.transition_policy !== 'auto' ? b.transition_policy : previous?.transitionPolicy ?? 'auto',
@@ -121,6 +125,7 @@ export function briefRequest(settings: BriefSettings): AutoEditRequest {
   return {
     musicAssetId: settings.musicAssetId, mood: settings.mood, durationS: settings.durationS,
     videoAssetIds: [...settings.videoAssetIds], transitionPolicy: settings.transitionPolicy, title: settings.title,
+    style: settings.style ?? 'auto', look: settings.look ?? null, transitionFamily: settings.transitionFamily ?? null,
     ...(settings.preferTags?.length || settings.avoidTags?.length
       ? { shots: { prefer: [...(settings.preferTags ?? [])], avoid: [...(settings.avoidTags ?? [])] } } : {}),
   };
@@ -209,7 +214,7 @@ export function suggestions(timeline: Timeline | null, assets: Asset[]): string[
   if (!hasVideo || !hasSong) return [];
   const clips = videoClipCount(timeline);
   if (!clips) return ['Make a 30 second energetic reel', 'Calm 20 second video with soft fades', '15 second reel, title "My trip"'];
-  return clips >= 3 ? ['Add fades between clips', 'Which clips are close-ups?', 'Remove the dark clips']
+  return clips >= 3 ? ['Make it look pro', 'Add zoom transitions', 'Cinematic look', 'Which clips are close-ups?']
     : ['Add fades between clips', 'Make it black and white'];
 }
 

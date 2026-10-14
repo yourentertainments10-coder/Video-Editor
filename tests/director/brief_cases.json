@@ -1102,9 +1102,10 @@
    "expect": {
     "duration_s": 30.0,
     "aspect": "9:16",
-    "mood": "energetic"
+    "mood": "energetic",
+    "look": "mono"
    },
-   "questions": 1,
+   "questions": 0,
    "unknown_words": []
   },
   {
@@ -1314,6 +1315,53 @@
     "mood": "energetic"
    },
    "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "20 second reel with glitch transitions and lots of effects",
+   "expect": {
+    "duration_s": 20.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "style": "bold",
+    "transition_family": "glitch"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "calm 30s youtube video, vintage look, no effects",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "16:9",
+    "mood": "calm",
+    "style": "clean",
+    "look": "vintage"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "15 sec energetic reel with zoom transitions, cinematic look",
+   "expect": {
+    "duration_s": 15.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "look": "cinematic",
+    "transition_family": "zoom"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second wedding film, warm tone, professional",
+   "expect": {
+    "duration_s": 30.0,
+    "mood": "energetic",
+    "look": "warm",
+    "style": "auto"
+   },
+   "questions": 1,
    "unknown_words": []
   }
  ]

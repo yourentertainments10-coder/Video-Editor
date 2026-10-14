@@ -1384,9 +1384,23 @@
   },
   {
    "text": "make it more cinematic",
-   "intent": "unknown",
-   "operations": [],
-   "questions": 1
+   "intent": "style",
+   "operations": [
+    {
+     "op": "set_look",
+     "clips": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+     ],
+     "look": "cinematic"
+    }
+   ],
+   "questions": 0
   },
   {
    "text": "cut 3 seconds from the beginning",
@@ -1523,6 +1537,238 @@
    "intent": "unknown",
    "operations": [],
    "questions": 1
+  },
+  {
+   "text": "add transition in all clips",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "style_transitions",
+     "clips": [],
+     "family": "mix",
+     "scope": "all"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "add zoom transitions",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "style_transitions",
+     "clips": [],
+     "family": "zoom",
+     "scope": "accents"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "glitch transitions on every cut",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "style_transitions",
+     "clips": [],
+     "family": "glitch",
+     "scope": "all"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "add a slide transition to clip 5",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "style_transitions",
+     "clips": [
+      5
+     ],
+     "family": "slide",
+     "scope": "all"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "different transitions please",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "style_transitions",
+     "clips": [],
+     "family": "mix",
+     "scope": "accents"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "make it look pro",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "apply_style",
+     "clips": [],
+     "style": "auto"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "make it look pro with lots of effects",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "apply_style",
+     "clips": [],
+     "style": "bold"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "effects lagao",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "apply_style",
+     "clips": [],
+     "style": "auto"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "vintage look",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "set_look",
+     "clips": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+     ],
+     "look": "vintage"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "make it warm",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "set_look",
+     "clips": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+     ],
+     "look": "warm"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "add film grain",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "add_effect",
+     "clips": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+     ],
+     "effect_id": "grain",
+     "amount": 0.5
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "add a vignette to clip 3",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "add_effect",
+     "clips": [
+      3
+     ],
+     "effect_id": "vignette",
+     "amount": 0.5
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "flash on the beat drops",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "add_accents",
+     "clips": [],
+     "effect_id": "flash",
+     "scope": "accents"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "zoom punch on every beat",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "add_accents",
+     "clips": [],
+     "effect_id": "zoom_punch",
+     "scope": "all"
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "stabilize clip 2",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "add_effect",
+     "clips": [
+      2
+     ],
+     "effect_id": "stabilize",
+     "amount": 0.6
+    }
+   ],
+   "questions": 0
+  },
+  {
+   "text": "clean it up, plain cuts",
+   "intent": "style",
+   "operations": [
+    {
+     "op": "apply_style",
+     "clips": [],
+     "style": "clean"
+    }
+   ],
+   "questions": 0
   }
  ]
 }

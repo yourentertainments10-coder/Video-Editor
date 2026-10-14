@@ -8,6 +8,7 @@ export type BriefResponse = {
     transition_policy: TransitionPolicy; title: string | null;
     only_asset_ids: string[]; exclude_asset_ids: string[];
     prefer_tags?: string[]; avoid_tags?: string[];
+    style?: 'clean' | 'auto' | 'bold' | null; look?: string | null; transition_family?: string | null;
   };
   understood: string[]; defaults: string[]; questions: string[]; unknown_words: string[];
   video_asset_ids: string[];

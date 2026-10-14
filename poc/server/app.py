@@ -23,6 +23,7 @@ from poc.director import AssetRef, parse_brief, selected_video_ids
 from poc.director.apply import apply_style
 from poc.director.footage import Footage, clip_tags, replace_sources, summarise_footage
 from poc.director.revise import apply_operations, parse_instructions
+from poc.director.style import FAMILIES, LOOKS, STYLES, accent_cuts, plan_style, set_transitions
 from poc.perceive.shots import TAG_LABELS, ShotMap, analyze_shots
 from poc.director.brief import MAX_TITLE_CHARS
 from poc.resources import ui_dist_dir
@@ -60,7 +61,7 @@ def _project_root(data_dir: Path, project_id: str) -> Path:
 # for a newer server can tell the user to restart an old one (instead of failing with 404).
 CHAT_LIMIT = 300                 # messages kept per project
 CHAT_MAX_BYTES = 2 * 1024 * 1024
-API_LEVEL = 5   # 1: U1-U4, 2: Local Director briefs (LD-1), 3: revisions (LD-2), 4: chat history, 5: footage
+API_LEVEL = 6   # 1: U1-U4, 2: Local Director briefs (LD-1), 3: revisions (LD-2), 4: chat history, 5: footage, 6: styles
 
 
 def _library(root: Path) -> ProjectAssetLibrary:
@@ -523,6 +524,15 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         if title is not None and (not isinstance(title, str) or not title.strip() or len(title) > MAX_TITLE_CHARS):
             raise HTTPException(422, f"title must be 1-{MAX_TITLE_CHARS} characters")
         title = title.strip() if title else None
+        style = body.get("style", "clean")
+        if style not in STYLES:
+            raise HTTPException(422, f"style must be one of: {', '.join(STYLES)}")
+        look = body.get("look")
+        if look is not None and look not in LOOKS:
+            raise HTTPException(422, f"look must be one of: {', '.join(sorted(LOOKS))}")
+        transition_family = body.get("transition_family")
+        if transition_family is not None and transition_family not in FAMILIES:
+            raise HTTPException(422, f"transition_family must be one of: {', '.join(FAMILIES)}")
         shots = body.get("shots") or {}
         if not isinstance(shots, dict):
             raise HTTPException(422, "shots must be {prefer: [...], avoid: [...]}")
@@ -640,6 +650,15 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
                                                                 list(avoid_tags), footage)
                         # fades depend on the footage around each cut: work them out again
                         editor_timeline = apply_style(editor_timeline, transition_policy=transition_policy)
+                if style != "clean" or look:
+                    update("running", 0.8, "Adding transitions and effects")
+                    seen, _, _ = look_at_footage(_library(root))
+                    editor_timeline, _ = plan_style(editor_timeline, mood=mood, style=style, look=look, footage=seen,
+                                                    transitions=transition_policy == "auto")
+                if transition_family and transition_policy == "auto":
+                    cuts = [c.index for c in accent_cuts(editor_timeline, mood, "bold" if style == "bold" else "auto")]
+                    editor_timeline, _ = set_transitions(editor_timeline, cuts, FAMILIES[transition_family],
+                                                         320 if mood == "energetic" else 650, clear_others=True)
                 with app.state.timeline_lock:
                     latest = EditorTimeline.load(root / "timeline.json")
                     if latest.revision != base_revision:

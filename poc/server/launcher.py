@@ -176,6 +176,34 @@ def self_check(folder: Path) -> dict:
             raise RuntimeError("OpenCV has no face cascades (install opencv-python-headless>=4.9,<5)")
         return "face detection ok"
 
+    def effects():
+        """Every transition and effect the catalogue offers must work in the bundled FFmpeg."""
+        from poc.ingest.normalize import FFMPEG_EXE
+        from poc.render.effects import build_effect_filters
+        from poc.render.transitions import XFADE
+        from poc.timeline import EFFECT_CATALOGUE
+        chain = build_effect_filters(
+            [{"effect_id": e.effect_id, "parameters": {p.name: p.default for p in e.parameter_schema
+                                                         if p.default is not None} or {"amount": 0.5}}
+             for e in EFFECT_CATALOGUE if e.effect_id not in ("brightness", "blur")],
+            width=64, height=48, fps=10, left_handle_frames=0, clip_frames=6)
+        names = sorted(set(XFADE.values()))
+        graph = [f"[0:v]{chain},format=yuv420p[o0]"]
+        for index, name in enumerate(names):
+            first, second = 1 + 2 * index, 2 + 2 * index
+            graph.append(f"[{first}:v][{second}:v]xfade=transition={name}:duration=0.2:offset=0.1[o{index + 1}]")
+        inputs, outputs = [], []
+        for _ in range(1 + 2 * len(names)):
+            inputs += ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=0.6"]
+        for index in range(1 + len(names)):
+            outputs += ["-map", f"[o{index}]", "-f", "null", "-"]
+        result = subprocess.run([FFMPEG_EXE, "-hide_banner", "-loglevel", "error", *inputs,
+                                 "-filter_complex", ";".join(graph), *outputs],
+                                capture_output=True, text=True, timeout=120)
+        if result.returncode:
+            raise RuntimeError(f"FFmpeg cannot do every effect/transition: {result.stderr.strip()[:300]}")
+        return f"{len(EFFECT_CATALOGUE)} effects, {len(names)} transitions ok"
+
     record("ui", ui)
     record("fonts", fonts)
     record("ffmpeg", ffmpeg)
@@ -183,6 +211,7 @@ def self_check(folder: Path) -> dict:
     record("libraries", libraries)
     record("director", director)
     record("footage", footage)
+    record("effects", effects)
     return {"ok": all(item["ok"] for item in results.values()), "frozen": is_frozen(),
             "checks": results}
 

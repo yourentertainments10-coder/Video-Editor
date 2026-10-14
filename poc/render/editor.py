@@ -108,7 +108,16 @@ _TRANSITION_MAP = {
     "cut": "cut",
     "fade": "crossfade",
     "dip_to_black": "fade_black",
+    "dip_to_white": "fade_white",
     "wipe_left": "wipe_left",
+    "wipe_right": "wipe_right",
+    "wipe_up": "wipe_up",
+    "wipe_down": "wipe_down",
+    "dissolve": "dissolve",
+    **{tid: tid for tid in (
+        "slide_left", "slide_right", "slide_up", "slide_down", "zoom_through", "blur_through",
+        "circle_open", "circle_close", "radial", "pixelize", "smooth_left", "smooth_right",
+        "squeeze", "slice", "wind", "diagonal", "fade_mono")},
 }
 
 
@@ -154,12 +163,14 @@ def _check_transition_parameters(clip) -> None:
     reason = None
     if transition_id == "fade" and params is not None and params.curve != "linear":
         reason = f"curve={params.curve!r}"
-    elif transition_id == "dip_to_black" and params is not None:
+    elif transition_id in ("dip_to_black", "dip_to_white") and params is not None:
         if params.peak_fraction != 0.5:
             reason = f"peak_fraction={params.peak_fraction!r}"
         elif params.hold_fraction != 0.0:
             reason = f"hold_fraction={params.hold_fraction!r}"
-    elif transition_id == "wipe_left" and params is not None and params.softness != 0.0:
+    elif transition_id.startswith("wipe_") and params is not None and params.softness != 0.0:
+        reason = f"softness={params.softness!r}"
+    elif transition_id == "dissolve" and params is not None and params.softness != 0.0:
         reason = f"softness={params.softness!r}"
     if reason:
         raise EditorRenderError(

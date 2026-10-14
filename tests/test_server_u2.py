@@ -109,7 +109,7 @@ def test_catalogue_lists_items_with_renderability_and_schema(client):
     data = r.json()
     t = {i["transition_id"]: i for i in data["transitions"]}
     assert t["fade"]["renderable"] is True
-    assert t["dissolve"]["renderable"] is False
+    assert t["dissolve"]["renderable"] is True          # Phase 3 (owner-approved update)
     e = {i["effect_id"]: i for i in data["effects"]}
     assert e["brightness"]["renderable"] is True
     assert any(f["name"] == "amount" for f in e["brightness"]["parameter_schema"])
