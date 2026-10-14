@@ -56,7 +56,9 @@ def _project_root(data_dir: Path, project_id: str) -> Path:
 
 # Bump together with API_LEVEL in ui/src/api.ts whenever endpoints change, so a page built
 # for a newer server can tell the user to restart an old one (instead of failing with 404).
-API_LEVEL = 3   # 1: U1-U4, 2: Local Director briefs (LD-1), 3: revisions (LD-2)
+CHAT_LIMIT = 300                 # messages kept per project
+CHAT_MAX_BYTES = 2 * 1024 * 1024
+API_LEVEL = 4   # 1: U1-U4, 2: Local Director briefs (LD-1), 3: revisions (LD-2), 4: chat history
 
 
 def _library(root: Path) -> ProjectAssetLibrary:
@@ -389,6 +391,31 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         payload = result.model_dump()
         payload["video_asset_ids"] = selected_video_ids(result.brief, refs)
         return payload
+
+    @app.get("/api/projects/{pid}/chat")
+    def get_chat(pid: str):
+        """The Director conversation of a project (kept beside project.json)."""
+        path = _project_root(data_dir, pid) / "chat.json"
+        try:
+            messages = json.loads(path.read_text(encoding="utf-8")).get("messages", [])
+        except (OSError, ValueError, AttributeError):
+            messages = []
+        return {"messages": messages if isinstance(messages, list) else []}
+
+    @app.put("/api/projects/{pid}/chat")
+    def put_chat(pid: str, body: dict[str, Any]):
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
+            raise HTTPException(422, "messages must be a list of objects")
+        messages = messages[-CHAT_LIMIT:]
+        text = json.dumps({"messages": messages}, ensure_ascii=False)
+        if len(text.encode("utf-8")) > CHAT_MAX_BYTES:
+            raise HTTPException(413, "conversation is too large to save")
+        root = _project_root(data_dir, pid)
+        partial = root / f"chat.json.{secrets.token_hex(4)}.partial"
+        partial.write_text(text, encoding="utf-8")
+        os.replace(partial, root / "chat.json")
+        return {"saved": len(messages)}
 
     @app.post("/api/projects/{pid}/revise")
     def revise(pid: str, body: dict[str, Any]):

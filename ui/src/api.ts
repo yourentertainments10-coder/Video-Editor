@@ -30,7 +30,7 @@ export class ApiError extends Error {
 }
 
 /** Must equal API_LEVEL in poc/server/app.py (checked by tests/test_polish.py). */
-export const API_LEVEL = 3;
+export const API_LEVEL = 4;
 
 /** Turn an error response into a readable sentence (FastAPI sends {"detail": ...}). */
 export function errorMessage(status: number, body: string, statusText = ''): string {

@@ -1250,6 +1250,27 @@
    },
    "questions": 0,
    "unknown_words": []
+  },
+  {
+   "text": "Make a 20 second energetic reel with soft fades, title 'Live night'",
+   "expect": {
+    "duration_s": 20.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "soft",
+    "title": "Live night"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "calm video with soft fades",
+   "expect": {
+    "mood": "calm",
+    "transition_policy": "soft"
+   },
+   "questions": 2,
+   "unknown_words": []
   }
  ]
 }

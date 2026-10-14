@@ -16,8 +16,8 @@ import { TimelineEditor } from './timeline/TimelineEditor';
 import { addTextClip, deleteClip, splitAt, Timeline, TimelineClip } from './timeline/ops';
 import { AutoEditDialog, AutoEditRequest } from './timeline/AutoEditDialog';
 import { BriefResponse } from './timeline/brief';
-import { ReviseBar } from './timeline/ReviseBar';
-import { RevisionResponse } from './timeline/revise';
+import { clipNumbers, RevisionResponse } from './timeline/revise';
+import { AutoEditStatus, ChatPanel } from './director/ChatPanel';
 import { canRedo, canUndo, createHistory, History, push, redo, undo } from './timeline/history';
 import { commandForKey } from './timeline/keys';
 import { clipVolume, formatTimecode, nextEditPoint, playbackSource, stepFrames, upcomingAsset } from './timeline/navigation';
@@ -51,6 +51,8 @@ function App() {
   const [showAutoEdit, setShowAutoEdit] = useState(false);
   const [autoEditMood, setAutoEditMood] = useState<'energetic' | 'calm' | undefined>(undefined);
   const [autoEditError, setAutoEditError] = useState<string | null>(null);
+  const [autoEditStatus, setAutoEditStatus] = useState<AutoEditStatus>(null);
+  const [view, setView] = useState<'chat' | 'edit'>('chat');
   const [history, setHistory] = useState<History<Timeline> | null>(null);
   const [saveCycle, setSaveCycle] = useState(0);
   const dirty = useRef(false);
@@ -71,6 +73,8 @@ function App() {
     finally { setChecking(false); }
   };
   const openProject = async (value: Project) => {
+    // drop the previous project's media first: its clips must never be requested under the new project
+    setTimeline(null); setAssets([]); setHistory(null); historyRef.current = null;
     setProject(value); setSelectedAsset(null); setSelectedClipId(null); setJob(null); setError(''); setPreviewRender(''); setSaveMessage('Loading…');
     dirty.current = false;
     try {
@@ -124,6 +128,8 @@ function App() {
     const timer = window.setTimeout(() => {
       void api<Job>(`/api/jobs/${job.job_id}`).then(async next => {
         setJob(next);
+        const status = { status: next.status, progress: next.progress, message: next.message, error: next.error };
+        if (autoEditJob.current && next.status !== 'done') setAutoEditStatus(status);
         if (next.status === 'done' && autoEditJob.current) {
           autoEditJob.current = false;
           const saved = await api<{ revision: number; timeline: Timeline }>(`/api/projects/${project.project_id}/timeline`);
@@ -134,7 +140,7 @@ function App() {
           }
           dirty.current = false;
           setTimeline(saved.timeline); setRevision(saved.revision); setIssues([]); setSaveMessage('Saved');
-          setSelectedClipId(null); setPlayhead(0); setAutoEditError(null);
+          setSelectedClipId(null); setPlayhead(0); setAutoEditError(null); setAutoEditStatus(status);
           await runCheck(project.project_id);
         } else if (['failed', 'cancelled'].includes(next.status)) {
           autoEditJob.current = false;
@@ -317,8 +323,8 @@ function App() {
     if (!project) throw new Error('No project open');
     return api<BriefResponse>(`/api/projects/${project.project_id}/brief`, json('POST', { text }));
   };
-  const startAutoEdit = async (request: AutoEditRequest) => {
-    if (!project || !timeline) return;
+  const startAutoEdit = async (request: AutoEditRequest): Promise<boolean> => {
+    if (!project || !timeline) return false;
     setAutoEditError(null);
     autoEditJob.current = true;
     try {
@@ -328,7 +334,16 @@ function App() {
         transition_policy: request.transitionPolicy, ...(request.title ? { title: request.title } : {}),
       }));
       setJob({ job_id: result.job_id, status: 'queued', progress: 0, message: 'Queued', output: null, report: null, error: null });
-    } catch (e) { autoEditJob.current = false; setAutoEditError(e instanceof Error ? e.message : String(e)); }
+      setAutoEditStatus({ status: 'queued', progress: 0, message: 'Queued', error: null });
+      return true;
+    } catch (e) { autoEditJob.current = false; setAutoEditError(e instanceof Error ? e.message : String(e)); return false; }
+  };
+  const selectClipNumber = (n: number) => {
+    if (!timeline) return;
+    const id = [...clipNumbers(timeline).entries()].find(([, number]) => number === n)?.[0];
+    const clip = timeline.clips.find(c => c.clip_id === id);
+    if (!clip) return;
+    setSelectedClipId(clip.clip_id); seekTo(clip.start_tick); setView('edit');
   };
   const startRender = async (forPreview: boolean) => {
     if (!project || !readiness?.ok) return;
@@ -355,8 +370,20 @@ function App() {
         <nav>{projects.map(item => <button key={item.project_id} className={`project-link ${project?.project_id === item.project_id ? 'active' : ''}`} onClick={() => void openProject(item)}><span className="folder-icon">▰</span>{item.name}</button>)}</nav>
         <div className="sidebar-note"><span>◉</span><p>Files stay on this computer.<br/>No uploads or cloud services.</p></div>
       </aside>
-      <section className="main-column">
-        {!project || !timeline ? <div className="empty-state"><div className="empty-icon">▧</div><h1>Your edit starts here</h1><p>Create a project or open one from the list.</p><button onClick={() => void createProject()}>Create project</button></div> : <>
+      <section className={`main-column ${project && timeline ? 'has-studio' : ''}`}>
+        {project && !timeline && !error ? <div className="empty-state" aria-busy="true"><span className="thinking" aria-label="Loading"><i/><i/><i/></span><p>Opening {project.name}…</p></div>
+          : !project || !timeline ? <div className="empty-state"><div className="empty-icon">▧</div><h1>Your edit starts here</h1><p>Create a project or open one from the list.</p><button onClick={() => void createProject()}>Create project</button></div> : <div className={`studio view-${view}`}>
+          <div className="view-tabs" role="tablist" aria-label="Show">
+            <button role="tab" aria-selected={view === 'chat'} className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>Director</button>
+            <button role="tab" aria-selected={view === 'edit'} className={view === 'edit' ? 'active' : ''} onClick={() => setView('edit')}>Editor</button>
+          </div>
+          <ChatPanel project={project} assets={assets} timeline={timeline} autoEdit={autoEditStatus}
+            jobBusy={!!job && ['queued', 'running'].includes(job.status)}
+            onRevise={askRevision} onBrief={readBrief} onApply={next => updateTimeline(next)} onUndo={undoEdit} onRedo={redoEdit}
+            onStartAutoEdit={async (request, nextProfile) => { if (nextProfile) setProfile(nextProfile); return startAutoEdit(request); }}
+            onOpenAutoEdit={mood => { setAutoEditMood(mood); setShowAutoEdit(true); }}
+            onSelectClip={selectClipNumber} onAddMedia={() => void addMedia()}/>
+          <div className="editor-column">
           <div className="page-heading"><div><p className="eyebrow">PROJECT</p><h1>{project.name}</h1></div><button className="primary" onClick={() => void addMedia()}>＋ Add media</button></div>
           <div className="media-section"><div className="section-head"><div><h2>Media bin</h2><span>{assets.length} items</span></div><button className="quiet" onClick={() => void openProject(project)}>↻</button></div>
             <div className="media-grid">{assets.map(asset => <button key={asset.asset_id} className={`media-card ${selectedAsset?.asset_id === asset.asset_id ? 'chosen' : ''}`} draggable onDragStart={event => { event.dataTransfer.setData('application/x-editor-asset', asset.asset_id); event.dataTransfer.effectAllowed = 'copy'; }} onClick={() => { setSelectedAsset(asset); setPreviewRender(''); }}>
@@ -371,9 +398,6 @@ function App() {
             <button className="quiet" onClick={redoEdit} disabled={!history || !canRedo(history)} title="Redo (Ctrl+Shift+Z / Ctrl+Y)">Redo</button></div>
             {autoEditError && <span className="error-text" role="alert">{autoEditError}</span>}
           </div>
-          <ReviseBar timeline={timeline} disabled={!!job && ['queued', 'running'].includes(job.status)}
-            onAsk={askRevision} onApply={next => updateTimeline(next)} onUndo={undoEdit} onRedo={redoEdit}
-            onAutoEdit={mood => { setAutoEditMood(mood); setShowAutoEdit(true); }}/>
           <TimelineEditor timeline={timeline} assets={assets} projectId={project.project_id} selectedId={selectedClipId} onSelect={setSelectedClipId} playhead={playhead} onPlayhead={seekTo} onChange={updateTimeline} issues={issues} error={timelineError} onError={setTimelineError} playing={playing} onTogglePlay={togglePlayback} timecode={formatTimecode(timeline, playhead)} onShortcuts={() => setShowShortcuts(true)} onRegisterZoomActions={registerZoomActions}/>
           <div className="editor-workbench">
             <section className="panel preview-panel"><div className="section-head"><div><h2>Preview</h2><span>{previewRender ? 'Quick preview render' : 'Rough preview — transitions, effects and titles show in Quick preview render'}</span></div><span className="panel-dot"/></div>
@@ -406,7 +430,8 @@ function App() {
               {job?.error && <p className="error-text">{job.error}</p>}
             </section>
           </div>
-        </>}
+          </div>
+        </div>}
         {serverProblem && <div className="error-banner server-banner" role="alert"><span>{serverProblem}</span></div>}
         {error && !error.startsWith('Clip') && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
       </section>

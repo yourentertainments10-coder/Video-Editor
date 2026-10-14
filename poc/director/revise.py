@@ -86,6 +86,36 @@ def _seconds(ms: float) -> str:
     return f"{ms / 1000:.2f}".rstrip("0").rstrip(".") + " s"
 
 
+def _clock(ms: float) -> str:
+    """Source position as people read it: 1:55.7 (or 7.2 s under a minute)."""
+    seconds = ms / 1000
+    if seconds < 60:
+        return _seconds(ms)
+    return f"{int(seconds // 60)}:{seconds % 60:04.1f}"
+
+
+def _explain(number: int, name: str, clip) -> str:
+    """Why the auto-edit chose a clip, in words (terms of poc/decide/cutter.py's score)."""
+    r = clip.rationale or {}
+    reasons = []
+    if "motion_match" in r:
+        m = r["motion_match"]
+        fit = "fits the music's pace well" if m >= 0.8 else "fits the music's pace" if m >= 0.6 else "is the best pace match it had"
+        reasons.append(f"its movement {fit} (motion match {m:.2f})")
+    if "quality" in r:
+        q = r["quality"]
+        look = "sharp and well exposed" if q >= 0.7 else "acceptable" if q >= 0.45 else "on the soft side"
+        reasons.append(f"the picture is {look} (quality {q:.2f})")
+    if "reuse" in r:
+        reasons.append("it is a different file from the clips just before it" if r["reuse"] == 0
+                       else f"it repeats a file used just before (reuse {r['reuse']:.2f}), which counted against it")
+    if "coverage" in r and r["coverage"] >= 0.5:
+        reasons.append(f"this file was already used a lot (coverage {r['coverage']:.2f}), which counted against it")
+    because = "; ".join(reasons) if reasons else "it had the best score"
+    return (f"Clip {number} is {name} from {_clock(clip.source_in_ms or 0)}. "
+            f"The auto-edit chose it (score {clip.score or 0:.2f}) because {because}.")
+
+
 # ---------------------------------------------------------------- references
 
 class _Refs(BaseModel):
@@ -260,9 +290,7 @@ def parse_revision(text: str, timeline: EditorTimeline) -> RevisionResult:
         asset = next((a for a in timeline.assets if a.asset_id == clip.asset_id), None)
         name = re.split(r"[\\/]", asset.uri or asset.asset_id)[-1] if asset else clip.asset_id
         if clip.rationale:
-            parts = ", ".join(f"{k.replace('_', ' ')} {v:.2f}" for k, v in sorted(clip.rationale.items()))
-            answer = (f"Clip {refs.indices[0]} ({name}, from {_seconds(clip.source_in_ms or 0)}) was picked by the "
-                      f"auto-edit with score {clip.score or 0:.2f}: {parts}.")
+            answer = _explain(refs.indices[0], name, clip)
         else:
             answer = f"Clip {refs.indices[0]} ({name}) was placed by hand, so there is no auto-edit reason."
         return result("explain", answer=answer)

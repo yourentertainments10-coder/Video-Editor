@@ -53,6 +53,19 @@ clear "I don't understand X; try one of: …" instead of a guess.
 - Tests: `tests/director/revision_cases.json` (113 golden instructions), each applied
   change validated, plus server and UI tests.
 
+## Implementation status (chat)
+
+- The Director is a conversation panel beside the editor (`ui/src/director/ChatPanel.tsx`,
+  pure logic in `ui/src/director/chat.ts`). With an empty timeline, or a message like
+  "make a 20 second reel", the message is read as a brief and answered with a settings card
+  (song, length, mood, videos, transitions, title, format) and one "Create edit" button.
+  Otherwise it is read as a revision: a proposed change with Apply / Discard, then Undo.
+- Nothing changes the edit without a click. Proposed timelines live only in memory; after a
+  reload an unapplied proposal shows as expired with "Ask again".
+- "clip 3" in a reply is a link that selects the clip and moves the playhead to it.
+- The conversation is saved per project in `chat.json` (`GET/PUT /api/projects/{pid}/chat`,
+  last 300 messages). Narrow windows show Director / Editor tabs.
+
 ## 2. Components
 
 ```

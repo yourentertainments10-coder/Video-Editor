@@ -181,3 +181,10 @@ def test_combined_summary_does_not_count_clips_that_another_part_removes():
     assert any("black and white on all clips" in line for line in result.summary), result.summary
     single = parse_revision("make it black and white", TL)
     assert any(f"all {len(video_clips(TL))} clips" in line for line in single.summary)
+
+
+def test_explain_reads_like_a_sentence():
+    from poc.director.revise import _clock
+    assert _clock(115_700) == "1:55.7" and _clock(7_200) == "7.2 s" and _clock(60_000) == "1:00.0"
+    answer = parse_revision("why clip 3?", TL).answer
+    assert answer.startswith("Clip 3 is ") and "because" in answer and "coverage 0.00" not in answer
