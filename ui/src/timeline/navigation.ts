@@ -52,3 +52,11 @@ export function clipVolume(tl: Timeline, clipId: string): number {
   const gain = Number(audio?.gain_db ?? 0);
   return Math.max(0, Math.min(1, Math.pow(10, gain / 20)));
 }
+
+/** Asset of the clip on `track` under or after `tick` (the one playback reaches next), if any. */
+export function upcomingAsset(tl: Timeline, track: string, tick: number): string | null {
+  const next = tl.clips
+    .filter(c => c.track_id === track && c.start_tick + c.duration_ticks > tick)
+    .sort((a, b) => a.start_tick - b.start_tick)[0];
+  return next ? next.asset_id : null;
+}

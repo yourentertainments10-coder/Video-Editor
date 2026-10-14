@@ -26,6 +26,9 @@ PROXY_HEIGHT = 720
 PROXY_FPS = 30
 PROXY_PRESET = "veryfast"
 PROXY_CRF = 28
+# A keyframe every half second: the timeline preview seeks at almost every cut, and a seek has
+# to decode from the previous keyframe (x264's default is one every 250 frames, ~8 s).
+PROXY_GOP = 15
 
 
 @lru_cache(maxsize=1)
@@ -52,7 +55,8 @@ def _source_path(asset: MediaAsset) -> Path:
 # same file twice at once (two preview players, Range requests). Each output therefore gets
 # one build lock, a unique partial file, and a decode check before it becomes the cache.
 # CACHE_VERSION 2 discards caches built before this (some could be corrupt).
-CACHE_VERSION = 2
+# CACHE_VERSION 3 rebuilds proxies with short keyframe intervals (fast seeking).
+CACHE_VERSION = 3
 _BUILD_LOCKS: dict[str, threading.Lock] = {}
 _BUILD_LOCKS_GUARD = threading.Lock()
 
@@ -154,6 +158,7 @@ def make_proxy(asset: MediaAsset, cache_dir: Path) -> Path:
         "vcodec": "libx264",
         "preset": PROXY_PRESET,
         "crf": PROXY_CRF,
+        "gop": PROXY_GOP,
         "audio": ["aac", "128k", 48000, 2] if normalized.has_audio else None,
         "pixel_format": "yuv420p",
         "color": ["bt709", "bt709", "bt709", "tv"],
@@ -183,6 +188,7 @@ def _build_proxy(asset: MediaAsset, normalized, duration: float, params: dict, o
         "-map", "0:v:0", "-map", "0:a:0?",
         "-vf", ",".join(filters),
         "-c:v", "libx264", "-preset", PROXY_PRESET, "-crf", str(PROXY_CRF),
+        "-g", str(PROXY_GOP), "-keyint_min", str(PROXY_GOP), "-sc_threshold", "0",
         "-pix_fmt", "yuv420p",
         "-colorspace", "bt709", "-color_primaries", "bt709",
         "-color_trc", "bt709", "-color_range", "tv",

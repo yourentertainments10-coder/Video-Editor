@@ -174,3 +174,10 @@ def test_splitting_keeps_lists_and_phrases_whole():
     assert split_instructions("remove clips 2 and 5") == ["remove clips 2 and 5"]
     assert split_instructions("make it black and white") == ["make it black and white"]
     assert split_instructions("title 'Rock and Roll, then more'") == ["title 'Rock and Roll, then more'"]
+
+
+def test_combined_summary_does_not_count_clips_that_another_part_removes():
+    result = parse_revision("remove clips 2 to 4 and make it black and white", TL)
+    assert any("black and white on all clips" in line for line in result.summary), result.summary
+    single = parse_revision("make it black and white", TL)
+    assert any(f"all {len(video_clips(TL))} clips" in line for line in single.summary)

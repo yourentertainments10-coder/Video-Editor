@@ -144,6 +144,33 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
     app.state.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="editor-render")
     app.state.asset_probe_cache = {}
     app.state.asset_probe_lock = threading.Lock()
+    app.state.media_paths: dict[tuple, tuple] = {}
+    app.state.media_paths_lock = threading.Lock()
+
+    def cached_media(kind: str, pid: str, aid: str, build) -> Path:
+        """Path of an asset's proxy/audio preview, without re-probing it on every request.
+
+        The browser sends many Range requests per file while previewing; the full lookup
+        (load project, probe the source, hash the cache key) is only redone when project.json
+        changes or the cached file is gone.
+        """
+        root = _project_root(data_dir, pid)
+        stat = (root / "project.json").stat()
+        key = (kind, pid, aid)
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        with app.state.media_paths_lock:
+            hit = app.state.media_paths.get(key)
+        if hit and hit[0] == stamp and hit[1].is_file():
+            return hit[1]
+        library = _library(root)
+        try:
+            path = build(library.asset(aid).media_asset, data_dir / "cache")
+        except (AssetImportError, FileNotFoundError, ValueError) as exc:
+            message = "asset not found or cannot be proxied" if kind == "proxy" else "asset has no audio preview"
+            raise HTTPException(404, message) from exc
+        with app.state.media_paths_lock:
+            app.state.media_paths[key] = (stamp, path)
+        return path
 
     @app.middleware("http")
     async def local_security(request: Request, call_next):
@@ -258,24 +285,12 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
 
     @app.get("/api/projects/{pid}/assets/{aid}/proxy")
     def asset_proxy(pid: str, aid: str, range_header: str | None = Header(default=None, alias="Range")):
-        root = _project_root(data_dir, pid)
-        library = _library(root)
-        try:
-            asset = library.asset(aid).media_asset
-            path = make_proxy(asset, data_dir / "cache")
-        except (AssetImportError, FileNotFoundError, ValueError) as exc:
-            raise HTTPException(404, "asset not found or cannot be proxied") from exc
+        path = cached_media("proxy", pid, aid, lambda asset, cache: make_proxy(asset, cache))
         return _range_file_response(path, range_header, "video/mp4")
 
     @app.get("/api/projects/{pid}/assets/{aid}/audio")
     def asset_audio(pid: str, aid: str, range_header: str | None = Header(default=None, alias="Range")):
-        root = _project_root(data_dir, pid)
-        library = _library(root)
-        try:
-            asset = library.asset(aid).media_asset
-            path = make_audio_preview(asset, data_dir / "cache")
-        except (AssetImportError, FileNotFoundError, ValueError) as exc:
-            raise HTTPException(404, "asset has no audio preview") from exc
+        path = cached_media("audio", pid, aid, lambda asset, cache: make_audio_preview(asset, cache))
         return _range_file_response(path, range_header, "audio/mp4")
 
     @app.get("/api/projects/{pid}/assets/{aid}/thumbnails/{n}")

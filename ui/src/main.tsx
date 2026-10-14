@@ -20,7 +20,7 @@ import { ReviseBar } from './timeline/ReviseBar';
 import { RevisionResponse } from './timeline/revise';
 import { canRedo, canUndo, createHistory, History, push, redo, undo } from './timeline/history';
 import { commandForKey } from './timeline/keys';
-import { clipVolume, formatTimecode, nextEditPoint, playbackSource, stepFrames } from './timeline/navigation';
+import { clipVolume, formatTimecode, nextEditPoint, playbackSource, stepFrames, upcomingAsset } from './timeline/navigation';
 import './style.css';
 
 const profiles = ['preview_540p', 'youtube_1080p', 'reels_9x16', 'square_1x1'];
@@ -217,7 +217,9 @@ function App() {
     setPlaying(true);
   };
   const musicSource = timeline ? playbackSource(timeline, 'music', playhead) : null;
-  const playbackAudioUrl = project && musicSource ? assetAudioUrl(project.project_id, musicSource.asset_id) : '';
+  // load the song before its clip starts (music often begins a few frames in), not at its first frame
+  const musicAssetId = musicSource?.asset_id ?? (timeline ? upcomingAsset(timeline, 'music', playhead) : null);
+  const playbackAudioUrl = project && musicAssetId ? assetAudioUrl(project.project_id, musicAssetId) : '';
 
   useEffect(() => {
     if (!playing || !timeline) return;

@@ -214,7 +214,8 @@ def parse_instructions(text: str, timeline: EditorTimeline) -> RevisionResult:
     combined = RevisionResult(intent="multiple")
     for part, r in zip(parts, results):
         combined.operations.extend(r.operations)
-        combined.summary.extend(r.summary)
+        # "all 55 clips" is wrong once another part removes some: say "all clips"
+        combined.summary.extend(re.sub(r"\ball \d+ clips\b", "all clips", line) for line in r.summary)
         combined.questions.extend(f"'{part}': {q}" for q in r.questions)
     return combined
 

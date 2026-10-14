@@ -73,3 +73,21 @@ describe('clipVolume', () => {
     expect(clipVolume(t({ gain_db: 6 }), 'x')).toBe(1);
   });
 });
+
+import { upcomingAsset } from '../src/timeline/navigation';
+
+describe('upcomingAsset', () => {
+  const tl: any = { clips: [
+    { clip_id: 'm1', asset_id: 'song', track_id: 'music', start_tick: 133, duration_ticks: 1000 },
+    { clip_id: 'm2', asset_id: 'song2', track_id: 'music', start_tick: 2000, duration_ticks: 500 },
+    { clip_id: 'v', asset_id: 'vid', track_id: 'video', start_tick: 0, duration_ticks: 3000 },
+  ] };
+  it('names the song before its clip starts, so it can load in time', () => {
+    expect(upcomingAsset(tl, 'music', 0)).toBe('song');
+  });
+  it('is the clip under the playhead, then the next one, then nothing', () => {
+    expect(upcomingAsset(tl, 'music', 500)).toBe('song');
+    expect(upcomingAsset(tl, 'music', 1500)).toBe('song2');
+    expect(upcomingAsset(tl, 'music', 2600)).toBeNull();
+  });
+});
