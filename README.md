@@ -129,6 +129,14 @@ http://localhost:5173/
 
 > The frontend is intended for local browser development and preview workflows, not remote hosting.
 
+## Windows installer
+
+`powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1` builds a self-contained
+app (Python, FFmpeg and the UI bundled, no internet needed) and an installer
+`build\installer\OfflineVideoEditor-Setup-<version>.exe`. See [packaging/README.md](packaging/README.md).
+
+`python -m poc.server --check` runs the same self-test as the installed app.
+
 ## Run the CLI pipeline
 
 After placing footage and music under `project/`, run:

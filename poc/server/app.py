@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from poc.resources import ui_dist_dir
 from poc.decide import CutterError, GridError, cut
 from poc.editor_bridge import legacy_to_editor
 from poc.ingest.normalize import normalize_asset
@@ -118,7 +119,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
                dev_mode: bool = False) -> FastAPI:
     data_dir = Path(data_dir).resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
-    ui_dist = Path(__file__).resolve().parents[2] / "ui" / "dist"
+    ui_dist = ui_dist_dir()
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         try:

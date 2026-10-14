@@ -1,0 +1,3 @@
+# Build-time only (not shipped). Install into the project venv before running build_windows.ps1.
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8

@@ -17,9 +17,10 @@ import numpy as np
 
 from poc.ingest.normalize import FFMPEG_EXE, FFMPEG_NETWORK_SAFE
 from poc.render._process import run_ffmpeg_atomic
+from poc.resources import fonts_dir
 
 
-_FONTS_DIR = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+_FONTS_DIR = fonts_dir()
 _FONT_ENTRIES = json.loads((_FONTS_DIR / "fonts.json").read_text(encoding="utf-8"))
 _FONT_FAMILIES = {entry["family"] for entry in _FONT_ENTRIES}
 _HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
