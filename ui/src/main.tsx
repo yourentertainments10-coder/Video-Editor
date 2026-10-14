@@ -1,16 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, Asset, assetAudioUrl, assetProxyUrl, EditorCatalogue, Job, json, Project, saveTimeline, thumbnailUrl } from './api';
+import { api, Asset, assetAudioUrl, EditorCatalogue, Job, json, Project, saveTimeline, thumbnailUrl } from './api';
 import { Inspector } from './timeline/Inspector';
 import { exportAdvice } from './exportAdvice';
-import { ExportProfile } from './exportAdvice';
+import { PreviewPlayer } from './timeline/PreviewPlayer';
 
-// Define export profiles matching the backend
-const EXPORT_PROFILES: Record<string, ExportProfile> = {
-  preview_540p: { name: 'preview_540p', width: 960, height: 540, fps: 30, crf: 28, preset: 'veryfast', audio_bitrate: '128k', target_lufs: -14.0, true_peak_db: -1.0 },
-  youtube_1080p: { name: 'youtube_1080p', width: 1920, height: 1080, fps: 30, crf: 18, preset: 'medium', audio_bitrate: '192k', target_lufs: -14.0, true_peak_db: -1.0 },
-  reels_9x16: { name: 'reels_9x16', width: 1080, height: 1920, fps: 30, crf: 20, preset: 'medium', audio_bitrate: '192k', target_lufs: -14.0, true_peak_db: -1.0 },
-  square_1x1: { name: 'square_1x1', width: 1080, height: 1080, fps: 30, crf: 20, preset: 'medium', audio_bitrate: '192k', target_lufs: -14.0, true_peak_db: -1.0 },
+// Frame sizes of the backend export profiles (poc/render/export.py), used for export advice.
+const EXPORT_SIZES: Record<string, { name: string; width: number; height: number }> = {
+  preview_540p: { name: 'preview_540p', width: 960, height: 540 },
+  youtube_1080p: { name: 'youtube_1080p', width: 1920, height: 1080 },
+  reels_9x16: { name: 'reels_9x16', width: 1080, height: 1920 },
+  square_1x1: { name: 'square_1x1', width: 1080, height: 1080 },
 };
 import { TimelineEditor } from './timeline/TimelineEditor';
 import { addTextClip, deleteClip, splitAt, Timeline, TimelineClip } from './timeline/ops';
@@ -55,7 +55,6 @@ function App() {
   const autoEditJob = useRef(false);
   const historyRef = useRef<History<Timeline> | null>(null);
   const coalesceRef = useRef<{ key: string; timer: number } | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const playbackClock = useRef<{ wall: number; tick: number }>({ wall: 0, tick: 0 });
   const zoomActions = useRef<{ zoomIn: () => void; zoomOut: () => void; zoomFit: () => void } | null>(null);
@@ -209,13 +208,8 @@ function App() {
     if (start !== playhead) { setPlayhead(start); setSeekSerial(value => value + 1); }
     setPlaying(true);
   };
-  const videoSource = timeline ? playbackSource(timeline, 'video', playhead) : null;
   const musicSource = timeline ? playbackSource(timeline, 'music', playhead) : null;
-  const playbackVideoUrl = project && videoSource ? assetProxyUrl(project.project_id, videoSource.asset_id) : '';
   const playbackAudioUrl = project && musicSource ? assetAudioUrl(project.project_id, musicSource.asset_id) : '';
-  const nextVideoSource = timeline && videoSource
-    ? playbackSource(timeline, 'video', Math.min(timeline.duration_ticks, videoSource.clip_end_tick)) : null;
-  const nextVideoUrl = project && nextVideoSource ? assetProxyUrl(project.project_id, nextVideoSource.asset_id) : '';
 
   useEffect(() => {
     if (!playing || !timeline) return;
@@ -238,14 +232,6 @@ function App() {
     frame = requestAnimationFrame(advance);
     return () => cancelAnimationFrame(frame);
   }, [playing, timeline]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !videoSource) return;
-    video.currentTime = Math.max(0, videoSource.source_ms / 1000);
-    if (playing) void video.play().catch(() => undefined);
-    else video.pause();
-  }, [videoSource?.clip_id, playbackVideoUrl, seekSerial, playing]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -368,8 +354,7 @@ function App() {
           <TimelineEditor timeline={timeline} assets={assets} projectId={project.project_id} selectedId={selectedClipId} onSelect={setSelectedClipId} playhead={playhead} onPlayhead={seekTo} onChange={updateTimeline} issues={issues} error={timelineError} onError={setTimelineError} playing={playing} onTogglePlay={togglePlayback} timecode={formatTimecode(timeline, playhead)} onShortcuts={() => setShowShortcuts(true)} onRegisterZoomActions={registerZoomActions}/>
           <div className="editor-workbench">
             <section className="panel preview-panel"><div className="section-head"><div><h2>Preview</h2><span>{previewRender ? 'Quick preview render' : 'Rough preview — transitions, effects and titles show in Quick preview render'}</span></div><span className="panel-dot"/></div>
-              {previewRender ? <video key={previewUrl} src={previewUrl} controls autoPlay/> : videoSource ? <video ref={videoRef} key={videoSource.clip_id} src={playbackVideoUrl} preload="auto" muted playsInline/> : timeline.clips.some(clip => clip.track_id === 'video') ? <div className="preview-black" aria-label="Black gap"/> : previewUrl && selectedAsset?.kind !== 'image' ? <video key={previewUrl} src={previewUrl} controls/> : previewUrl ? <img className="still-preview" src={previewUrl} alt="Selected still"/> : <div className="preview-empty"><span>▶</span><p>Select a video to preview</p></div>}
-              {nextVideoUrl && nextVideoSource?.clip_id !== videoSource?.clip_id && <video className="preview-preload" src={nextVideoUrl} preload="auto" muted aria-hidden="true"/>}
+              {previewRender ? <video key={previewUrl} src={previewUrl} controls autoPlay/> : timeline.clips.some(clip => clip.track_id === 'video') ? <PreviewPlayer timeline={timeline} projectId={project.project_id} playhead={playhead} playing={playing} seekSerial={seekSerial}/> : previewUrl && selectedAsset?.kind !== 'image' ? <video key={previewUrl} src={previewUrl} controls/> : previewUrl ? <img className="still-preview" src={previewUrl} alt="Selected still"/> : <div className="preview-empty"><span>▶</span><p>Select a video to preview</p></div>}
               <audio ref={audioRef} src={playbackAudioUrl || undefined} preload="auto" />
               <button className="quiet preview-render" disabled={!readiness?.ok || checking || job?.status === 'running'} onClick={() => void startRender(true)}>Quick preview render</button>
             </section>
@@ -380,11 +365,11 @@ function App() {
               <label htmlFor="profile">Export profile</label><select id="profile" value={profile} onChange={e => setProfile(e.target.value)}>{profiles.map(p => <option key={p} value={p}>{p.replaceAll('_', ' ')}</option>)}</select>
 
               {/* Export advice */}
-              {exportAdvice(assets, EXPORT_PROFILES[profile]).map((advice, index) => (
+              {exportAdvice(assets, EXPORT_SIZES[profile] ?? EXPORT_SIZES.youtube_1080p).map((advice, index) => (
                 <div key={index} className="export-advice">
                   <strong>{advice.code === 'orientation' ? 'Orientation:' : 'Resolution:'}</strong> {advice.message}
                   {advice.suggest && (
-                    <button className="quiet" onClick={() => setProfile(advice.suggest)}>
+                    <button className="quiet" onClick={() => { if (advice.suggest) setProfile(advice.suggest); }}>
                       Switch to {advice.suggest.replaceAll('_', ' ')}
                     </button>
                   )}
@@ -394,7 +379,7 @@ function App() {
               {!job || ['done', 'failed', 'cancelled'].includes(job.status) ? <button className="primary render-button" onClick={() => void startRender(false)} disabled={!readiness?.ok || checking}>{readiness?.ok ? 'Render video' : 'Resolve timeline issues'}</button> : <>
                 <div className="job-line"><span>{job.message}</span><strong>{Math.round(job.progress * 100)}%</strong></div><div className="progress"><i style={{ width: `${job.progress * 100}%` }}/></div><button className="quiet cancel" onClick={() => void cancel()}>Cancel render</button>
               </>}
-              {job?.status === 'done' && <div className="job-result"><strong className={job.report?.ok ? 'good' : 'bad'}>{job.report?.ok ? '✓ Render verified' : '⚠ Verification found issues'}</strong>{job.report?.problems.map(problem => <small key={problem}>{problem}</small>)}{job.timings?.total !== undefined && <small>Render time: {job.timings.total.toFixed(1)} s · preset {job.encoder?.preset ?? 'unknown'}</small>}<button className="quiet" onClick={() => void reveal()}>Show in folder ↗</button></div>}
+              {job?.status === 'done' && <div className="job-result"><strong className={job.report?.ok ? 'good' : 'bad'}>{job.report?.ok ? '✓ Render verified' : '⚠ Verification found issues'}</strong>{job.report?.problems.map(problem => <small key={problem}>{problem}</small>)}{job.timings?.total !== undefined && <small className="render-stats">Render time: {job.timings.total.toFixed(1)} s · preset {job.encoder?.preset ?? 'unknown'}</small>}<button className="quiet" onClick={() => void reveal()}>Show in folder ↗</button></div>}
               {job?.error && <p className="error-text">{job.error}</p>}
             </section>
           </div>

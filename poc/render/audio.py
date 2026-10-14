@@ -61,12 +61,9 @@ def render_audio_track(
         ])
         # Silent audio will be generated in filter graph later
 
-    # Track each source input index (silent clips have a separate lavfi input).
-    source_audio_indices = []
-    next_input = 0
-    for has_audio in input_has_audio:
-        source_audio_indices.append(next_input if has_audio else next_input + 1)
-        next_input += 1 if has_audio else 2
+    # One input per segment; silent segments get their silence from anullsrc in the graph.
+    source_audio_indices = [index if has_audio else None
+                            for index, has_audio in enumerate(input_has_audio)]
 
     graph = []
     for i, (segment, (_, normalized)) in enumerate(zip(segments, media)):
