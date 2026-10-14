@@ -308,3 +308,44 @@ def test_transition_family_from_a_brief(client):
     assert client.post(f"/api/projects/{pid}/auto-edit", json={
         "base_revision": rev, "music_asset_id": assets["synth_128.wav"]["asset_id"], "mood": "calm",
         "duration_s": 3, "transition_family": "sparkle"}).status_code == 422
+
+
+def test_sound_effects_are_made_here_hidden_from_the_bin_and_removable(client):
+    pid, assets = _project(client)
+    rev = client.get(f"/api/projects/{pid}/timeline").json()["revision"]
+    job = _wait(client, client.post(f"/api/projects/{pid}/auto-edit", json={
+        "base_revision": rev, "music_asset_id": assets["synth_128.wav"]["asset_id"], "mood": "energetic",
+        "duration_s": 12, "style": "bold"}).json()["job_id"])
+    assert job["status"] == "done", job
+    tl = client.get(f"/api/projects/{pid}/timeline").json()["timeline"]
+    sounds = [c for c in tl["clips"] if c["clip_id"].startswith("sfx_")]
+    assert sounds and all(c["track_id"] == "voice" for c in sounds)
+    listed = client.get(f"/api/projects/{pid}/assets").json()["assets"]
+    generated = [a for a in listed if a["generated"]]
+    assert {a["file_name"] for a in generated} >= {"sfx-whoosh-v1.wav", "sfx-impact-v1.wav"}
+    assert not any(a["generated"] for a in listed if a["file_name"] == "synth_128.wav")
+    r = client.post(f"/api/projects/{pid}/revise", json={"text": "remove the sound effects", "timeline": tl}).json()
+    assert r["timeline"] and not any(c["clip_id"].startswith("sfx_") for c in r["timeline"]["clips"])
+    again = client.post(f"/api/projects/{pid}/revise", json={"text": "add whooshes", "timeline": r["timeline"]}).json()
+    assert any(c["clip_id"].startswith("sfx_") for c in again["timeline"]["clips"]), again
+
+
+@pytest.mark.parametrize("style,animation", [("clean", "lower_third"), ("auto", "word_pop")])
+def test_animated_title_from_a_brief_renders(client, style, animation):
+    pid, assets = _project(client)
+    brief = client.post(f"/api/projects/{pid}/brief",
+                        json={"text": "6 second reel, title 'Goa trip' with words popping in"}).json()["brief"]
+    assert (brief["title"], brief["title_animation"]) == ("Goa trip", "word_pop")
+    rev = client.get(f"/api/projects/{pid}/timeline").json()["revision"]
+    base = {"base_revision": rev, "music_asset_id": assets["synth_128.wav"]["asset_id"], "mood": "energetic",
+            "duration_s": 6, "style": style, "title": "Goa trip"}
+    assert client.post(f"/api/projects/{pid}/auto-edit", json={**base, "title_animation": "spin"}).status_code == 422
+    job = _wait(client, client.post(f"/api/projects/{pid}/auto-edit",
+                                    json={**base, "title_animation": animation}).json()["job_id"])
+    assert job["status"] == "done", job
+    tl = client.get(f"/api/projects/{pid}/timeline").json()["timeline"]
+    title = next(a for a in tl["assets"] if a["kind"] == "text")
+    assert title["metadata"]["title_style"] == {"animation": animation, "by": "user"}
+    render = _wait(client, client.post(f"/api/projects/{pid}/render", json={"profile": "preview_540p"}).json()["job_id"])
+    assert render["status"] == "done", render
+    assert render["report"]["ok"] is True, render["report"]["problems"]

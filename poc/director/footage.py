@@ -58,6 +58,10 @@ def tag_spans(text: str) -> list[tuple[int, int, str]]:
             add(m, tag)
     for m in re.finditer(rf"\b(?:{_NOUN}|video|reel|edit)\s+(with|without|having|jisme|jinme)\s+(?:a\s+)?(?:faces?|people|log)\b", text):
         add(m, "no-faces" if m.group(1) == "without" else "faces")
+    # "which clips have faces?", "shots that show no people", "clips that don't have faces"
+    for m in re.finditer(rf"\b{_NOUN}\s+(?:that\s+|which\s+)?(do(?:n't|nt| not)\s+|does(?:n't|nt| not)\s+)?"
+                         rf"(?:have|has|show|shows|contain|contains)\s+(no\s+)?(?:any\s+)?(?:faces?|people)\b", text):
+        add(m, "no-faces" if m.group(1) or m.group(2) else "faces")
     return sorted(found)
 
 

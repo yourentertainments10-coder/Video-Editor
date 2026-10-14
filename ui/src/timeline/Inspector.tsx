@@ -1,5 +1,6 @@
 import React from 'react';
 import { EditorCatalogue } from '../api';
+import { TITLE_ANIMATION_NAMES } from './AutoEditDialog';
 import { Timeline, TimelineClip } from './ops';
 
 type Props = { timeline: Timeline; clip: TimelineClip | null; catalogue: EditorCatalogue | null;
@@ -31,12 +32,19 @@ export function Inspector({ timeline, clip, catalogue, onChange, onCoalesceEnd }
   };
   const changeAudio = (patch: Partial<typeof audio>, field: string) => updateClip({ audio: { ...audio, ...patch } }, field);
   const setText = (text: string) => onChange({ ...timeline, assets: timeline.assets.map(item => item.asset_id === clip.asset_id ? { ...item, text } : item) }, fieldKey('text'));
+  const titleStyle = ((asset?.metadata as Record<string, unknown> | undefined)?.title_style ?? {}) as Record<string, unknown>;
+  const setTitleStyle = (patch: Record<string, unknown>, field?: string) => onChange({ ...timeline, assets: timeline.assets.map(item => item.asset_id === clip.asset_id
+    ? { ...item, metadata: { ...(item.metadata ?? {}), title_style: { ...titleStyle, ...patch, by: 'user' } } } : item) }, field ? fieldKey(field) : undefined);
   const setTextY = (position_y: number) => updateClip({ transform: { ...(clip.transform as object ?? {}), position_y } }, 'text-y');
 
   return <aside className="inspector panel">
     <h2>Inspector</h2><p className="inspector-subtitle">{asset?.kind === 'text' ? 'Text title' : asset?.kind ?? 'Clip'} · {clip.clip_id}</p>
     {asset?.kind === 'text' ? <section className="inspector-group"><h3>Text</h3>
       <label>Content<textarea value={String(asset.text ?? '')} onChange={event => setText(event.target.value)} rows={4} {...fieldBlur('text')} /></label>
+      <label>Animation<select aria-label="Title animation" value={String(titleStyle.animation ?? 'fade')} onChange={event => setTitleStyle({ animation: event.target.value })}>
+        {Object.entries(TITLE_ANIMATION_NAMES).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+      </select></label>
+      <label>Colour<input type="color" aria-label="Title colour" value={String(titleStyle.color ?? '#ffffff')} onChange={event => setTitleStyle({ color: event.target.value.toUpperCase() }, 'title-color')} {...fieldBlur('title-color')} /></label>
       <label>Vertical position <input type="number" min="0" max="1" step="0.01" value={Number((clip.transform as any)?.position_y ?? 0)} onChange={event => setTextY(Number(event.target.value))} {...fieldBlur('text-y')} /></label>
     </section> : null}
     <section className="inspector-group"><h3>Transition in</h3>

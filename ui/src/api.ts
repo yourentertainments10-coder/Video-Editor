@@ -4,7 +4,10 @@ export type Asset = {
   width: number | null; height: number | null; fps: number | null; has_audio: boolean;
   rotation: number; hdr: boolean; thumbnail_count: number;
   text?: string; uri?: string | null; metadata?: Record<string, unknown>;
+  /** made by the editor (sound effects): hidden from the media bin, never the song */
+  generated?: boolean;
 };
+export const isSong = (asset: Asset) => (asset.kind === 'audio' || asset.kind === 'music') && !asset.generated;
 export type Job = {
   job_id: string; status: string; progress: number; message: string; output: string | null;
   report: { ok: boolean; problems: string[]; measured: Record<string, unknown> } | null; error: string | null;

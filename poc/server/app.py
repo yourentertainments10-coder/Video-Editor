@@ -23,7 +23,9 @@ from poc.director import AssetRef, parse_brief, selected_video_ids
 from poc.director.apply import apply_style
 from poc.director.footage import Footage, clip_tags, replace_sources, summarise_footage
 from poc.director.revise import apply_operations, parse_instructions
-from poc.director.style import FAMILIES, LOOKS, STYLES, accent_cuts, plan_style, set_transitions
+from poc.director.style import (FAMILIES, LOOKS, STYLES, TITLE_ANIMATIONS, accent_cuts, plan_style, set_title_animation,
+                                set_transitions)
+from poc.render.sfx import SOUNDS, sound_file
 from poc.perceive.shots import TAG_LABELS, ShotMap, analyze_shots
 from poc.director.brief import MAX_TITLE_CHARS
 from poc.resources import ui_dist_dir
@@ -125,6 +127,8 @@ def _asset_info(item, probe_cache: dict[str, dict[str, Any]], probe_lock: thread
     return {
         "asset_id": item.asset_id, "kind": item.kind,
         "file_name": Path(item.source_path).name, "duration_ms": item.duration_ms,
+        # made by the editor (sound effects): not shown in the media bin, never offered as the song
+        "generated": Path(item.source_path).parent.name == "sfx" and Path(item.source_path).name.startswith("sfx-"),
         **cached, "thumbnail_count": 10 if cached.get("width") and cached.get("height") else 0,
     }
 
@@ -189,6 +193,25 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             state = ("failed", f"{type(exc).__name__}: {exc}"[:300])
         with app.state.footage_lock:
             app.state.footage[key] = state
+
+    app.state.sfx_lock = threading.Lock()
+
+    def sound_effects(library: ProjectAssetLibrary) -> dict[str, MediaAsset]:
+        """The generated sound effects as assets of this project (made and imported on first use)."""
+        out: dict[str, MediaAsset] = {}
+        with app.state.sfx_lock:
+            known = {Path(item.source_path).resolve(): item for item in library.project.assets}
+            changed = False
+            for name in SOUNDS:
+                path = sound_file(data_dir / "sfx", name).resolve()
+                item = known.get(path)
+                if item is None:
+                    item = library.import_asset(path)
+                    changed = True
+                out[name] = item.media_asset
+            if changed:
+                library.save()
+        return out
 
     app.state.media_paths: dict[tuple, tuple] = {}
     app.state.media_paths_lock = threading.Lock()
@@ -487,7 +510,9 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         payload["notes"], payload["timeline"] = [], None
         if result.operations:
             try:
-                proposed, notes = apply_operations(current, result.operations, footage)
+                needs_sound = any(op.op in ("apply_style", "add_sfx") for op in result.operations)
+                sfx = sound_effects(_library(_project_root(data_dir, pid))) if needs_sound else None
+                proposed, notes = apply_operations(current, result.operations, footage, sfx)
                 EditorRenderer().compile(proposed, _library(_project_root(data_dir, pid)))
             except (ValueError, EditorRenderError) as exc:
                 payload["questions"].append(f"Can't do that: {exc}")
@@ -533,6 +558,9 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         transition_family = body.get("transition_family")
         if transition_family is not None and transition_family not in FAMILIES:
             raise HTTPException(422, f"transition_family must be one of: {', '.join(FAMILIES)}")
+        title_animation = body.get("title_animation")
+        if title_animation is not None and title_animation not in TITLE_ANIMATIONS:
+            raise HTTPException(422, f"title_animation must be one of: {', '.join(TITLE_ANIMATIONS)}")
         shots = body.get("shots") or {}
         if not isinstance(shots, dict):
             raise HTTPException(422, "shots must be {prefer: [...], avoid: [...]}")
@@ -618,6 +646,8 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
                     return
 
                 update("running", 0.85, "Saving")
+                # sound effects first: importing them changes project.json, which is saved below
+                sfx = sound_effects(_library(root)) if style != "clean" else None
                 refreshed_library = _library(root)
                 editor_timeline = legacy_to_editor(
                     legacy,
@@ -654,7 +684,10 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
                     update("running", 0.8, "Adding transitions and effects")
                     seen, _, _ = look_at_footage(_library(root))
                     editor_timeline, _ = plan_style(editor_timeline, mood=mood, style=style, look=look, footage=seen,
-                                                    transitions=transition_policy == "auto")
+                                                    transitions=transition_policy == "auto", sfx=sfx,
+                                                    title_animation_id=title_animation)
+                elif title_animation:
+                    editor_timeline = set_title_animation(editor_timeline, title_animation)
                 if transition_family and transition_policy == "auto":
                     cuts = [c.index for c in accent_cuts(editor_timeline, mood, "bold" if style == "bold" else "auto")]
                     editor_timeline, _ = set_transitions(editor_timeline, cuts, FAMILIES[transition_family],

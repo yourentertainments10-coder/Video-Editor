@@ -22,6 +22,8 @@ from typing import Literal, Sequence
 
 from pydantic import BaseModel, Field
 
+from poc.director.style import TITLE_ANIMATION_NAMES, find_title_animation
+
 Aspect = Literal["16:9", "9:16", "1:1"]
 Mood = Literal["energetic", "calm"]
 TransitionPolicy = Literal["auto", "cuts_only", "soft"]
@@ -49,6 +51,7 @@ class CreativeBrief(BaseModel):
     style: Literal["clean", "auto", "bold"] | None = None  # finishing pass (poc.director.style); None: not said
     look: str | None = None                                # colour look: cinematic, vintage, warm, cool, ...
     transition_family: str | None = None                   # "zoom", "slide", "glitch", ... for the accents
+    title_animation: str | None = None                     # pop, typewriter, lower_third, ... (poc.render.text)
     prefer_tags: list[str] = Field(default_factory=list)   # footage to use ("close-up", ...; poc.perceive.shots)
     avoid_tags: list[str] = Field(default_factory=list)    # footage to keep out ("dark", "shaky", ...)
 
@@ -77,7 +80,7 @@ def lexicon() -> dict:
 
 _QUOTES = {"“": '"', "”": '"', "‘": "'", "’": "'", " ": " "}
 _TITLE_RE = re.compile(
-    r"\b(?:title|heading|caption|text|naam|name)\b\s*(?:[:=]|\bis\b|\bshould be\b|\bsaying\b|\bthat says\b)?\s*"
+    r"(?:\b(?:title|heading|caption|text|naam|name)\b|\blower[- ]third\b)\s*(?:[:=]|\bis\b|\bshould be\b|\bsaying\b|\bthat says\b)?\s*"
     r"(?:\"([^\"]{1,200})\"|'([^']{1,200})')",
     re.IGNORECASE,
 )
@@ -166,6 +169,9 @@ def parse_brief(text: str, assets: Sequence[AssetRef] = ()) -> BriefResult:
         elif title:
             brief.title = title
             result.understood.append(f'Title: "{title}"')
+            if re.match(r"lower[- ]third", title_match.group(0), re.IGNORECASE):
+                brief.title_animation = "lower_third"
+                result.understood.append(f"Title animation: {TITLE_ANIMATION_NAMES['lower_third']}")
         consumed.append(title_match.span())
     masked = "".join(" " if any(s <= i < e for s, e in consumed) else ch for i, ch in enumerate(lower))
 
@@ -194,6 +200,14 @@ def parse_brief(text: str, assets: Sequence[AssetRef] = ()) -> BriefResult:
         else:
             result.defaults.append(f"{asset.file_name} is already used (all videos are used unless you say 'only' or 'skip').")
     masked = "".join(" " if any(s <= i < e for s, e in consumed) else ch for i, ch in enumerate(masked))
+
+    # --- how the title animates ("title 'Goa' with a typewriter effect", "lower third")
+    animated = find_title_animation(masked, lower)
+    if animated and brief.title_animation is None:
+        brief.title_animation = animated[0]
+        consumed.append(animated[1])
+        result.understood.append(f"Title animation: {TITLE_ANIMATION_NAMES[animated[0]]}")
+        masked = "".join(" " if any(s <= i < e for s, e in consumed) else ch for i, ch in enumerate(masked))
 
     # --- finishing pass: looks, effects, transition families (poc.director.style)
     look_words = {"cinematic": "cinematic", "movie": "cinematic", "vintage": "vintage", "retro": "vintage",

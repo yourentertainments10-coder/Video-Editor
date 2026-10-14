@@ -5,7 +5,7 @@ import { addClip, deleteClip, moveClip, snapToFrame, splitAt, Timeline, trimEnd,
 
 const tracks = [
   { id: 'video', label: 'Video' }, { id: 'overlay', label: 'Overlay' },
-  { id: 'voice', label: 'Voice' }, { id: 'music', label: 'Music' },
+  { id: 'voice', label: 'Voice & SFX' }, { id: 'music', label: 'Music' },
 ];
 
 type Props = {

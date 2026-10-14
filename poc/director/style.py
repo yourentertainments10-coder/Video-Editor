@@ -17,11 +17,15 @@ Rules of thumb it follows (the way an editor would):
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
+from poc.director.apply import TITLE_ASSET_ID
 from poc.director.footage import Footage, clip_tags
-from poc.timeline import EditorClip, EditorTimeline, EffectRef, TransitionRef
+from poc.render.sfx import SOUNDS
+from poc.render.text import ANIMATIONS as TITLE_ANIMATIONS
+from poc.timeline import AudioProperties, EditorClip, EditorTimeline, EffectRef, MediaAsset, TransitionRef
 
 Style = Literal["clean", "auto", "bold"]
 Mood = Literal["energetic", "calm"]
@@ -31,8 +35,13 @@ STYLES: tuple[str, ...] = ("clean", "auto", "bold")
 STYLE_EFFECTS = {
     "zoom_in", "zoom_out", "pan_left", "pan_right", "flash", "shake", "zoom_punch", "stabilize",
     "look_cinematic", "look_vintage", "look_warm", "look_cool", "look_punchy", "look_mono", "look_matte",
-    "vignette", "grain", "glow", "rgb_split", "sharpen",
+    "vignette", "grain", "glow", "rgb_split", "sharpen", "light_leak",
 }
+SFX_TRACK = "voice"            # sound effects sit on the voice track (mixed in, the music is not ducked)
+SFX_PREFIX = "sfx_"
+SFX_GAIN_DB = {"whoosh": -12.0, "whoosh_soft": -15.0, "impact": -10.0, "riser": -15.0}   # under the music
+# name -> the generated sound's MediaAsset (poc.render.sfx; made and imported by the server)
+Sfx = dict[str, MediaAsset]
 LOOKS = {"cinematic", "vintage", "warm", "cool", "punchy", "mono", "matte"}
 
 ENERGETIC_TRANSITIONS = ("zoom_through", "slide_left", "blur_through", "slide_up", "circle_open", "dip_to_white")
@@ -213,18 +222,65 @@ def default_look(mood: Mood, style: Style) -> str | None:
 
 
 def clear_style(tl: EditorTimeline, *, transitions: bool = True) -> EditorTimeline:
-    """Remove what the style pass adds (camera moves, accents, looks; and transitions)."""
+    """Remove what the style pass adds (camera moves, accents, looks, sound effects; and transitions)."""
     clips = []
     for c in tl.clips:
+        if c.clip_id.startswith(SFX_PREFIX):
+            continue
         if c.track_id == "video":
             c = c.model_copy(update={"effects": [e for e in c.effects if e.effect_id not in STYLE_EFFECTS],
                                      **({"transition": None} if transitions else {})})
         clips.append(c)
-    return tl.model_copy(update={"clips": clips})
+    tl = tl.model_copy(update={"clips": clips})
+    chosen = title_animation(tl)
+    if chosen is not None and chosen[1] == "auto":
+        tl = set_title_animation(tl, None)
+    return tl
+
+
+def add_sound_effects(tl: EditorTimeline, sfx: Sfx, *, mood: Mood, style: Style) -> tuple[EditorTimeline, int]:
+    """Whooshes on the transitions, an impact on the flash (the drop) and, when bold, a riser
+    into it. Never on top of the user's own voice-track clips; replaces earlier sound effects."""
+    tl = tl.model_copy(update={"clips": [c for c in tl.clips if not c.clip_id.startswith(SFX_PREFIX)]})
+    if not any(t.track_id == SFX_TRACK for t in tl.tracks):
+        return tl, 0
+    busy = [(c.start_tick, c.start_tick + c.duration_ticks) for c in tl.clips if c.track_id == SFX_TRACK]
+    events: list[tuple[int, str]] = []                      # (tick where the sound starts, name)
+    whoosh = "whoosh" if mood == "energetic" else "whoosh_soft"
+    for clip in video_clips(tl):
+        if clip.transition is not None and (mood == "energetic" or style == "bold"):
+            events.append((clip.start_tick - _ticks(tl, SOUNDS[whoosh][1]), whoosh))
+        if any(e.effect_id == "flash" for e in clip.effects):
+            events.append((clip.start_tick, "impact"))
+            if style == "bold":
+                events.append((clip.start_tick - _ticks(tl, SOUNDS["riser"][0]), "riser"))
+    placed = 0
+    assets = list(tl.assets)
+    clips = list(tl.clips)
+    for start, name in sorted(events):
+        asset = sfx.get(name)
+        if asset is None or start < 0:
+            continue
+        length = min(_ticks(tl, SOUNDS[name][0]), tl.duration_ticks - start)
+        if length <= _ticks(tl, 80):
+            continue
+        end = start + length
+        if any(start < b_end and end > b_start for b_start, b_end in busy):
+            continue
+        busy.append((start, end))
+        if asset.asset_id not in {a.asset_id for a in assets}:
+            assets.append(asset)
+        clips.append(EditorClip(clip_id=f"{SFX_PREFIX}{placed:03d}_{name}", asset_id=asset.asset_id, track_id=SFX_TRACK,
+                                start_tick=start, duration_ticks=length, source_in_ms=0,
+                                source_out_ms=int(round(_ms(tl, length))),
+                                audio=AudioProperties(gain_db=SFX_GAIN_DB[name])))
+        placed += 1
+    return tl.model_copy(update={"clips": clips, "assets": assets}), placed
 
 
 def plan_style(tl: EditorTimeline, *, mood: Mood, style: Style = "auto", look: str | None = None,
-               footage: Footage | None = None, transitions: bool = True) -> tuple[EditorTimeline, list[str]]:
+               footage: Footage | None = None, transitions: bool = True,
+               sfx: Sfx | None = None, title_animation_id: str | None = None) -> tuple[EditorTimeline, list[str]]:
     """Return a NEW timeline with the finishing pass and a few plain lines saying what was done."""
     if style not in STYLES:
         raise ValueError(f"unknown style: {style}")
@@ -232,8 +288,17 @@ def plan_style(tl: EditorTimeline, *, mood: Mood, style: Style = "auto", look: s
         raise ValueError(f"unknown look: {look}")
     tl = clear_style(tl, transitions=transitions)
     notes: list[str] = []
+    title = title_animation(tl)
+    if title is not None and title_animation_id is not None:
+        tl = set_title_animation(tl, title_animation_id)
+        notes.append(f"Title with {TITLE_ANIMATION_NAMES[title_animation_id]}.")
+    elif title is not None and title[1] == "auto" and style != "clean":
+        text = next(a.text or "" for a in tl.assets if a.asset_id == TITLE_ASSET_ID)
+        picked = pick_title_animation(mood, style, text)
+        tl = set_title_animation(tl, picked, by="auto")
+        notes.append(f"Title with {TITLE_ANIMATION_NAMES[picked]}.")
     if style == "clean" and look is None:
-        return tl, ["Clean edit: hard cuts, no effects."]
+        return tl, notes + ["Clean edit: hard cuts, no effects."]
     clips = video_clips(tl)
     accents = accent_cuts(tl, mood, style) if style != "clean" else []
     accent_index = {c.index for c in accents}
@@ -245,6 +310,8 @@ def plan_style(tl: EditorTimeline, *, mood: Mood, style: Style = "auto", look: s
         pool = (ENERGETIC_TRANSITIONS + (BOLD_EXTRA if style == "bold" else ())) if mood == "energetic" else CALM_TRANSITIONS
         limit = 300 if mood == "energetic" else 650
         on = sorted(accent_index - ({biggest_rise.index} if biggest_rise is not None else set()))
+        if mood == "calm":
+            on = on[::2]                     # calm: every other accent is a hard cut with a light leak
         tl, placed = set_transitions(tl, on, pool, limit)
         if placed:
             notes.append(f"{placed} transition{'s' if placed != 1 else ''} on the strongest beats; the other cuts stay "
@@ -252,7 +319,7 @@ def plan_style(tl: EditorTimeline, *, mood: Mood, style: Style = "auto", look: s
         clips = video_clips(tl)
 
     by_id = {c.clip_id: c for c in tl.clips}
-    punches = moves = steadied = lifted = 0
+    punches = moves = steadied = lifted = leaks = 0
     for index, clip in enumerate(clips):
         effects: list[EffectRef] = []
         ms = _ms(tl, clip.duration_ticks)
@@ -262,6 +329,10 @@ def plan_style(tl: EditorTimeline, *, mood: Mood, style: Style = "auto", look: s
                 effects.append(EffectRef(effect_id="zoom_punch", parameters={
                     "at_ms": 0, "duration_ms": int(min(350, ms * 0.6)), "amount": 0.8 if style == "bold" else 0.55}))
                 punches += 1
+            if mood == "calm" and index in accent_index and clip.transition is None and ms >= 900:
+                effects.append(EffectRef(effect_id="light_leak", parameters={
+                    "at_ms": 0, "duration_ms": int(min(1200, ms * 0.7)), "amount": 0.55 if style == "bold" else 0.4}))
+                leaks += 1
             if biggest_rise is not None and index == biggest_rise.index and clip.transition is None:
                 effects.append(EffectRef(effect_id="flash", parameters={"at_ms": 0, "duration_ms": 220,
                                                                         "amount": 0.6}))
@@ -300,10 +371,89 @@ def plan_style(tl: EditorTimeline, *, mood: Mood, style: Style = "auto", look: s
         notes.append(f"Stabilised {steadied} shaky clip{'s' if steadied != 1 else ''}.")
     if lifted:
         notes.append(f"Lifted {lifted} dark clip{'s' if lifted != 1 else ''} a little.")
+    if leaks:
+        notes.append(f"Warm light leaks on {leaks} clip{'s' if leaks != 1 else ''}.")
     chosen_look = look or default_look(mood, style)
     if chosen_look:
         notes.append(f"{chosen_look.capitalize()} look on every clip.")
+    if sfx and style != "clean":
+        tl, sounds = add_sound_effects(tl, sfx, mood=mood, style=style)
+        if sounds:
+            notes.append(f"{sounds} sound effect{'s' if sounds != 1 else ''} (whooshes on transitions"
+                         + (", an impact on the drop)." if mood == "energetic" else ")."))
     return tl, notes
+
+
+# ---------------------------------------------------------------- animated titles
+
+TITLE_ANIMATION_NAMES = {"fade": "a simple fade", "pop": "a pop", "slide_up": "a slide up",
+                         "typewriter": "a typewriter reveal", "word_pop": "words popping in one by one",
+                         "glow": "a neon glow", "lower_third": "a lower-third name bar"}
+# (pattern, animation, may stand alone without the word "title" nearby)
+_TITLE_ANIMATION_WORDS: tuple[tuple[str, str, bool], ...] = (
+    (r"type ?writer|typing|typed out|type[- ]on|letter by letter", "typewriter", True),
+    (r"word[- ]by[- ]word|word[- ]pops?|words? pop(?:ping)?(?: in)?", "word_pop", True),
+    (r"lower[- ]third|name (?:bar|strap|tag)", "lower_third", True),
+    (r"neon|glow(?:ing|y)?", "glow", False),
+    (r"slides? up|slid(?:e|ing) in|slid(?:e|ing)|ris(?:e|ing)", "slide_up", False),
+    (r"pop(?:[- ]?up|ping|s)?|bounc(?:e|y|ing)|punchy", "pop", False),
+    (r"(?:simple|plain|just a|soft) fade|fade[- ]?in|fading|no animation|without animation|"
+     r"(?:plain|simple|static) (?:title|text)", "fade", False),
+)
+_TITLE_WORD = re.compile(r"\b(?:title|titles|heading|text|caption|naam|name)\b")
+_NOT_TITLE = r"(?!\s+(?:song|songs|music|track|beat|beats|transitions?|look|colou?rs?|grade))"
+
+
+def find_title_animation(text: str, context: str | None = None) -> tuple[str, tuple[int, int]] | None:
+    """The title animation a sentence asks for and where it was said, e.g. "title with a typewriter
+    effect", "make the title pop", "lower third". ``text`` is lower-case. Words like "pop" or
+    "glow" only count next to "title"/"text" (so "pop song" or "glow look" are not titles).
+    ``context``: the same sentence before parts of it were blanked out (where "title" still shows)."""
+    titles = [m.span() for m in _TITLE_WORD.finditer(context or text)]
+    for pattern, animation, alone in _TITLE_ANIMATION_WORDS:
+        for m in re.finditer(rf"\b(?:{pattern})\b(?:\s+(?:effect|animation|style|reveal|intro|entry))?{_NOT_TITLE}", text):
+            near = any(abs(m.start() - e) <= 40 or abs(s - m.end()) <= 40 for s, e in titles
+                       if not re.search(r"[.;!?]", (context or text)[min(e, m.end()):max(s, m.start())]))
+            if alone or near:
+                return animation, m.span()
+    return None
+
+
+def title_animation(tl: EditorTimeline) -> tuple[str, str] | None:
+    """(animation, who chose it: "user" or "auto") of the Director's title, None without a title."""
+    asset = next((a for a in tl.assets if a.asset_id == TITLE_ASSET_ID and a.kind == "text"), None)
+    if asset is None:
+        return None
+    style = asset.metadata.get("title_style") if isinstance(asset.metadata, dict) else None
+    if not isinstance(style, dict) or style.get("animation") not in TITLE_ANIMATIONS:
+        return "fade", "auto"
+    return style["animation"], "user" if style.get("by") == "user" else "auto"
+
+
+def set_title_animation(tl: EditorTimeline, animation: str | None, *, by: str = "user") -> EditorTimeline:
+    """Give the Director's title an animation (None: back to the plain fade). No title: unchanged."""
+    if animation is not None and animation not in TITLE_ANIMATIONS:
+        raise ValueError(f"unknown title animation: {animation}")
+    assets = []
+    for a in tl.assets:
+        if a.asset_id == TITLE_ASSET_ID and a.kind == "text":
+            metadata = {k: v for k, v in a.metadata.items() if k != "title_style"}
+            if animation is not None:
+                metadata["title_style"] = {"animation": animation, "by": by}
+            a = a.model_copy(update={"metadata": metadata})
+        assets.append(a)
+    return tl.model_copy(update={"assets": assets})
+
+
+def pick_title_animation(mood: Mood, style: Style, text: str) -> str:
+    """Energetic: words pop in (a long title) or the whole title pops; calm: slides up (a short
+    title) or types itself; bold adds a neon glow to calm edits."""
+    words = len(text.split())
+    if mood == "energetic":
+        return "word_pop" if words >= 3 else "pop"
+    if style == "bold":
+        return "glow"
+    return "slide_up" if words <= 3 else "typewriter"
 
 
 def guess_mood(tl: EditorTimeline) -> Mood:

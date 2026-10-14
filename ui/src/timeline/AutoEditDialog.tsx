@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Asset } from '../api';
+import { Asset, isSong } from '../api';
 import { applyBrief, BriefResponse, TransitionPolicy } from './brief';
 
 export type AutoEditRequest = {
@@ -9,6 +9,13 @@ export type AutoEditRequest = {
   shots?: { prefer: string[]; avoid: string[] };
   /** finishing pass: transitions on strong beats, beat accents, camera moves and a colour look */
   style?: EditStyle; look?: string | null; transitionFamily?: string | null;
+  /** how the title appears (poc/render/text.py); null: chosen for the mood */
+  titleAnimation?: string | null;
+};
+/** Title animations the renderer draws (poc/render/text.py ANIMATIONS). */
+export const TITLE_ANIMATION_NAMES: Record<string, string> = {
+  fade: 'Simple fade', pop: 'Pop', slide_up: 'Slide up', typewriter: 'Typewriter', word_pop: 'Words pop in',
+  glow: 'Neon glow', lower_third: 'Lower third (name bar)',
 };
 export type EditStyle = 'clean' | 'auto' | 'bold';
 export const LOOK_NAMES: Record<string, string> = {
@@ -34,7 +41,7 @@ type Props = {
 };
 
 export function AutoEditDialog({ assets, hasClips, active, progress, message, error, onStart, onReadBrief, onProfile, onCancel, onClose, initialMood }: Props) {
-  const musicAssets = useMemo(() => assets.filter(asset => asset.kind === 'audio' || asset.kind === 'music'), [assets]);
+  const musicAssets = useMemo(() => assets.filter(isSong), [assets]);
   const videos = useMemo(() => assets.filter(asset => asset.kind === 'video'), [assets]);
   const [musicAssetId, setMusicAssetId] = useState('');
   const [mood, setMood] = useState<'energetic' | 'calm'>(initialMood ?? 'energetic');
@@ -43,6 +50,7 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
   const [selectedVideos, setSelectedVideos] = useState<Set<string>>(() => new Set(videos.map(video => video.asset_id)));
   const [transitionPolicy, setTransitionPolicy] = useState<TransitionPolicy>('auto');
   const [title, setTitle] = useState('');
+  const [titleAnimation, setTitleAnimation] = useState<string | null>(null);
   const [briefText, setBriefText] = useState('');
   const [briefNotes, setBriefNotes] = useState<string[]>([]);
   const [briefQuestions, setBriefQuestions] = useState<string[]>([]);
@@ -66,6 +74,7 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
       if (response.brief.style) setStyle(response.brief.style);
       if (response.brief.look) setLook(response.brief.look);
       setFamily(response.brief.transition_family ?? null);
+      if (response.brief.title_animation) setTitleAnimation(response.brief.title_animation);
       setBriefNotes(out.notes); setBriefQuestions(out.questions);
     } catch (e) {
       setBriefNotes([]); setBriefQuestions([e instanceof Error ? e.message : String(e)]);
@@ -75,6 +84,7 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
     musicAssetId, mood, durationS, videoAssetIds: [...selectedVideos], transitionPolicy, title: title.trim() || null,
     ...(shots ? { shots } : {}),
     style, look: look || null, transitionFamily: family,
+    ...(titleAnimation && title.trim() ? { titleAnimation } : {}),
   });
 
   return <div className="modal-backdrop" role="presentation">
@@ -114,6 +124,11 @@ export function AutoEditDialog({ assets, hasClips, active, progress, message, er
       </select></label>
       <label>Title (optional)<input aria-label="Title" maxLength={80} value={title} disabled={active}
         onChange={event => setTitle(event.target.value)}/></label>
+      {title.trim() && <label>Title animation<select aria-label="Title animation" value={titleAnimation ?? ''} disabled={active}
+        onChange={event => setTitleAnimation(event.target.value || null)}>
+        <option value="">{style === 'clean' ? 'Simple fade' : 'Automatic for the mood'}</option>
+        {Object.entries(TITLE_ANIMATION_NAMES).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+      </select></label>}
       <fieldset disabled={active}><legend>Use videos</legend>{videos.map(video => <label className="check-label" key={video.asset_id}>
         <input type="checkbox" checked={selectedVideos.has(video.asset_id)} onChange={event => setSelectedVideos(old => {
           const next = new Set(old); if (event.target.checked) next.add(video.asset_id); else next.delete(video.asset_id); return next;

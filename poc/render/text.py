@@ -41,6 +41,13 @@ class TextOverlay:
     fade_in_ms: int | None = None
     fade_out_ms: int | None = None
     font: str = "Noto Sans"
+    animation: str = "fade"        # fade, pop, slide_up, typewriter, word_pop, glow, lower_third
+    accent: str = "#FFB347"        # glow / lower-third colour (DEFAULT_ACCENT)
+    elapsed_ms: int = 0            # already on screen before start_ms (a later render chunk): no entrance again
+
+
+DEFAULT_ACCENT = "#FFB347"
+ANIMATIONS = ("fade", "pop", "slide_up", "typewriter", "word_pop", "glow", "lower_third")
 
 
 def _validate_overlay(overlay: TextOverlay) -> None:
@@ -56,6 +63,12 @@ def _validate_overlay(overlay: TextOverlay) -> None:
         raise ValueError("color must be #RRGGBB")
     if overlay.font not in _FONT_FAMILIES:
         raise ValueError(f"font family {overlay.font!r} is not in the bundled font manifest")
+    if overlay.animation not in ANIMATIONS:
+        raise ValueError(f"unknown title animation {overlay.animation!r}")
+    if not isinstance(overlay.accent, str) or not _HEX_COLOR.fullmatch(overlay.accent):
+        raise ValueError("accent must be #RRGGBB")
+    if not isinstance(overlay.elapsed_ms, int) or overlay.elapsed_ms < 0:
+        raise ValueError("elapsed_ms must be a non-negative integer")
 
 
 def _ass_time(ms: int) -> str:
@@ -98,6 +111,7 @@ def build_ass(overlays: list[TextOverlay], width: int, height: int) -> str:
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
         "Default,Noto Sans,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,3,0,5,0,0,0,1",
+        "Style: Box,Noto Sans,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,3,14,0,4,0,0,0,1",
     ]
     lines.extend([
         "",
@@ -117,16 +131,72 @@ def build_ass(overlays: list[TextOverlay], width: int, height: int) -> str:
         # font-size unit so cap-height text matches the size_pct contract.
         font_size = max(1, round(overlay.size_pct * height * 1.7))
         bold = 1 if overlay.bold else 0
-        tags = (
-            f"\\fn{overlay.font}\\fs{font_size}\\b{bold}"
-            f"\\c{_ass_color(overlay.color)}&\\bord{max(0, overlay.outline_px)}"
-            f"\\an5\\pos({x},{y})\\fad({fade_in},{fade_out})"
-        )
+        base = (f"\\fn{overlay.font}\\fs{font_size}\\b{bold}"
+                f"\\c{_ass_color(overlay.color)}&\\bord{max(0, overlay.outline_px)}")
+        style, text = "Default", _ass_text(overlay.text)
+        anim = overlay.animation
+        settled = overlay.elapsed_ms > 0          # continuing from an earlier chunk: the entrance is over
+        total = duration + overlay.elapsed_ms
+        if anim == "pop" and not settled:
+            tags = (f"{base}\\an5\\pos({x},{y})\\fad({min(80, fade_in)},{fade_out})\\fscx40\\fscy40"
+                    f"\\t(0,180,\\fscx112\\fscy112)\\t(180,300,\\fscx100\\fscy100)")
+        elif anim == "slide_up" and not settled:
+            rise = round(0.06 * height)
+            tags = f"{base}\\an5\\move({x},{y + rise},{x},{y},0,{min(400, duration // 2)})\\fad({fade_in},{fade_out})"
+        elif anim == "glow":
+            glow = "\\blur2" if settled else f"\\blur6\\t(0,{min(600, duration // 2)},\\blur2)"
+            tags = (f"{base}\\an5\\pos({x},{y})\\fad({fade_in},{fade_out})\\3c{_ass_color(overlay.accent)}&"
+                    f"\\bord{max(4, overlay.outline_px + 3)}{glow}")
+        elif anim in ("typewriter", "word_pop"):
+            tags = f"{base}\\an5\\pos({x},{y})\\fad(0,{fade_out})"
+            text = _reveal(overlay.text, total, by_word=anim == "word_pop", offset_ms=overlay.elapsed_ms)
+        elif anim == "lower_third":
+            style = "Box"
+            left = round(0.06 * width)
+            ly = round(0.82 * height)
+            where = (f"\\pos({left},{ly})" if settled else
+                     f"\\move({-round(0.5 * width)},{ly},{left},{ly},0,{min(450, duration // 2)})")
+            # the default accent is too light behind white text: a deeper orange bar
+            bar = "#D9480F" if overlay.accent == DEFAULT_ACCENT else overlay.accent
+            tags = (f"\\fn{overlay.font}\\fs{round(font_size * 0.8)}\\b1\\c{_ass_color(overlay.color)}&"
+                    f"\\3c{_ass_color(bar)}&\\bord{max(4, round(font_size * 0.3))}\\shad0\\an4{where}"
+                    f"\\fad(0,{fade_out})")
+        else:
+            tags = f"{base}\\an5\\pos({x},{y})\\fad({fade_in},{fade_out})"
         lines.append(
             f"Dialogue: 0,{_ass_time(overlay.start_ms)},{_ass_time(overlay.end_ms)},"
-            f"Default,,0,0,0,,{{{tags}}}{_ass_text(overlay.text)}"
+            f"{style},,0,0,0,,{{{tags}}}{text}"
         )
     return "\n".join(lines) + "\n"
+
+
+def _reveal(text: str, duration_ms: int, *, by_word: bool, offset_ms: int = 0) -> str:
+    """Text that appears letter by letter (typewriter) or word by word with a small pop.
+    ``offset_ms``: how much of the reveal already happened (the line starts that late)."""
+    parts = re.findall(r"\S+|\s+", text) if by_word else list(text)
+    visible = [p for p in parts if not p.isspace() and p != "\n"]
+    step = max(25, min(90 if not by_word else 260, int(0.55 * duration_ms / max(1, len(visible)))))
+    out, index = [], 0
+    for part in parts:
+        if part == "\n":
+            out.append(r"\N")
+            continue
+        escaped = part.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+        if part.isspace():
+            out.append(escaped.replace("\n", r"\N"))
+            continue
+        t = index * step - offset_ms
+        index += 1
+        if t + (160 if by_word else 1) <= 0:
+            out.append(escaped)                       # already revealed
+            continue
+        t = max(0, t)
+        if by_word:
+            out.append(f"{{\\alpha&HFF&\\fscx70\\fscy70\\t({t},{t + 1},\\alpha&H00&)"
+                       f"\\t({t},{t + 160},\\fscx100\\fscy100)}}{escaped}")
+        else:
+            out.append(f"{{\\alpha&HFF&\\t({t},{t + 1},\\alpha&H00&)}}{escaped}")
+    return "".join(out)
 
 
 def _escape_filter_path(path: str | Path) -> str:

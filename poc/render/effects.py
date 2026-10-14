@@ -130,6 +130,21 @@ def build_effect_filters(
             chain = _amount_effect(effect_id, float(p.get("amount", 0.6)), width, height)
             if chain:
                 filters.append(chain)
+        elif effect_id == "light_leak":
+            at = start + max(0.0, float(p.get("at_ms", 0))) / 1000
+            length = max(2.0 / fps, float(p.get("duration_ms", 600)) / 1000)
+            amount = float(p.get("amount", 0.6))
+            if amount <= 0:
+                continue
+            n = next(_LABELS)
+            rise = min(0.25 * length, 0.3)
+            # a blurred, warm-tinted copy of the picture, faded in and out, screen-blended on top
+            filters.append(
+                f"split[leak{n}a][leak{n}b];[leak{n}b]scale={max(2, width // 8)}:{max(2, height // 8)},"
+                f"gblur=sigma=4,colorchannelmixer=rr=1:rg=0.35:gg=0.55:bb=0.15:br=0.1,"
+                f"eq=brightness={_num(0.12 * amount)},scale={width}:{height},"
+                f"fade=t=in:st={_num(at)}:d={_num(rise)},fade=t=out:st={_num(at + length - rise)}:d={_num(rise)}"
+                f"[leak{n}c];[leak{n}a][leak{n}c]blend=all_mode=screen:all_opacity={_num(min(1.0, 0.5 + 0.5 * amount))}")
         elif effect_id in {"flash", "shake", "zoom_punch"}:
             at = start + max(0.0, float(p.get("at_ms", 0))) / 1000
             length = max(1.0 / fps, float(p.get("duration_ms", 300)) / 1000)

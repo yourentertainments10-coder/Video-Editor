@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field
 from poc.director.apply import TITLE_ASSET_ID, TITLE_CLIP_ID, TITLE_MS, apply_style
 from poc.director.brief import MAX_TITLE_CHARS, _normalise, _words_to_numbers
 from poc.director.footage import Footage, clip_tags, replace_sources, tags_in, tags_sentence
+from poc.director.style import (SFX_PREFIX, TITLE_ANIMATION_NAMES, Sfx, add_sound_effects, find_title_animation,
+                                set_title_animation, title_animation)
 from poc.director.style import (CALM_TRANSITIONS, ENERGETIC_TRANSITIONS, FAMILIES, STYLE_EFFECTS, accent_cuts, clear_style,
                                 guess_mood, look_effects, plan_style, set_transitions)
 from poc.perceive.shots import NEEDS_FACES, TAG_LABELS, TAG_SINGULAR
@@ -48,7 +50,7 @@ class Operation(BaseModel):
 
     op: Literal["remove_clips", "trim_clip", "cut_range", "set_length", "set_transitions", "set_transition",
                 "adjust_look", "clear_look", "add_motion", "set_title", "remove_title", "replace_source",
-                "apply_style", "set_look", "add_effect", "style_transitions", "add_accents"]
+                "apply_style", "set_look", "add_effect", "style_transitions", "add_accents", "add_sfx", "title_style"]
     clip_ids: list[str] = Field(default_factory=list)
     side: Literal["start", "end"] | None = None
     ms: int | None = None
@@ -64,6 +66,7 @@ class Operation(BaseModel):
     scope: Literal["all", "accents"] | None = None     # style_transitions / add_accents: every cut or the strong beats
     tags: list[str] = Field(default_factory=list)      # replace_source: footage the new shots must show
     avoid: list[str] = Field(default_factory=list)     # replace_source: footage they must not show
+    animation: str | None = None                       # set_title / title_style: pop, typewriter, ... (poc.render.text)
 
 
 class RevisionResult(BaseModel):
@@ -393,6 +396,13 @@ def _style_request(t: str, clips: list[EditorClip], ids: list[str], refs: "_Refs
             return "style", [Operation(op="add_effect", effect_id=effect_id, clip_ids=target, amount=0.0 if remove else 0.5)], [
                 f"{'Remove' if remove else 'Add'} {label} {'from' if remove else 'on'} {scope_text}."], []
 
+    # sound effects
+    if re.search(r"\b(?:sound effects?|sfx|whoosh(?:es)?|swoosh(?:es)?|swish(?:es)?|sound fx)\b", t):
+        remove = bool(re.search(r"\b(?:remove|delete|no|without|hatao|hata do|drop|mute)\b", t))
+        return "style", [Operation(op="add_sfx", text="remove" if remove else "add")], [
+            "Remove the sound effects." if remove else
+            "Add sound effects: whooshes on the transitions and an impact on the drop (quietly, under the music)."], []
+
     # stabilise
     if re.search(r"\b(?:stabili[sz]e|stabili[sz]ation|steady (?:it|them|the)|less shaky|fix (?:the )?shak(?:e|y|ing))", t):
         target = ids
@@ -526,7 +536,25 @@ def parse_revision(text: str, timeline: EditorTimeline, footage: Footage | None 
         return result("retime", mood=mood, summary=[f"Re-run the auto-edit as {mood}: the cutter decides the cut "
                                                     f"rhythm, so pace changes need a new auto-edit (you can undo it)."])
 
-    # 5. title
+    # 5. title (and how it animates)
+    unquoted = _TITLE_RE.sub(lambda m: " " * len(m.group(0)), t)
+    animated = find_title_animation(unquoted)
+    if animated and re.search(r"\b(?:title|heading|caption|text|naam|name)\b|lower[- ]third|type ?writer|word[- ]by[- ]word",
+                              unquoted):
+        animation = animated[0]
+        if title_text:
+            if len(title_text) > MAX_TITLE_CHARS:
+                return result("title", questions=[f"Titles can be at most {MAX_TITLE_CHARS} characters."])
+            at = "end" if re.search(r"\b(?:at the end|end|ending|outro|last|aakhir)\b", unquoted) else "start"
+            return result("title", [Operation(op="set_title", text=title_text, at=at, animation=animation)],
+                          [f'Title "{title_text}" with {TITLE_ANIMATION_NAMES[animation]} for '
+                           f"{_seconds(min(TITLE_MS, _ms(timeline, timeline.duration_ticks)))} at the {at}."])
+        if title_animation(timeline) is None:
+            return result("title", questions=[f"There is no title yet. Give me the words, e.g. title 'Goa 2026' with "
+                                              f"{TITLE_ANIMATION_NAMES[animation]}."])
+        return result("title", [Operation(op="title_style", animation=animation)],
+                      ["Plain title: a simple fade in and out." if animation == "fade" else
+                       f"Animate the title with {TITLE_ANIMATION_NAMES[animation]}."])
     if re.search(r"\b(?:title|heading|caption|text|naam)\b", t):
         if re.search(r"\b(?:remove|delete|drop|no|hatao|hata do|without)\b", t) and not title_text:
             if not any(c.clip_id == TITLE_CLIP_ID for c in timeline.clips):
@@ -777,7 +805,7 @@ def _cut_range(tl: EditorTimeline, start: int, end: int) -> EditorTimeline:
 
 
 def apply_operations(timeline: EditorTimeline, operations: list[Operation],
-                     footage: Footage | None = None) -> tuple[EditorTimeline, list[str]]:
+                     footage: Footage | None = None, sfx: Sfx | None = None) -> tuple[EditorTimeline, list[str]]:
     """Apply operations to a copy of ``timeline``. Returns (new timeline, extra notes).
     ``footage`` is needed only for "replace_source" (finding shots that show something).
 
@@ -888,14 +916,35 @@ def apply_operations(timeline: EditorTimeline, operations: list[Operation],
                 raise ValueError("the overlay track already has something there")
             rest.append(EditorClip(clip_id=TITLE_CLIP_ID, asset_id=TITLE_ASSET_ID, track_id="overlay",
                                    start_tick=start, duration_ticks=min(_ticks(tl, TITLE_MS), tl.duration_ticks)))
+            before = title_animation(tl)
             tl = tl.model_copy(update={"assets": assets, "clips": rest})
+            if op.animation is not None:
+                tl = set_title_animation(tl, op.animation)
+            elif before is not None and before[0] != "fade":
+                tl = set_title_animation(tl, before[0], by=before[1])     # a new text keeps its animation
+        elif op.op == "title_style":
+            tl = set_title_animation(tl, op.animation or "fade")   # chosen by the user: the style pass keeps it
         elif op.op == "remove_title":
             tl = tl.model_copy(update={"assets": [a for a in tl.assets if a.asset_id != TITLE_ASSET_ID],
                                        "clips": [c for c in tl.clips if c.clip_id != TITLE_CLIP_ID]})
         elif op.op == "apply_style":
             tl, style_notes = plan_style(tl, mood=guess_mood(tl), style=op.style or "auto", look=op.look,
-                                         footage=footage, transitions=True)
+                                         footage=footage, transitions=True, sfx=sfx)
             notes.extend(style_notes)
+        elif op.op == "add_sfx":
+            if op.text == "remove":
+                before = len(tl.clips)
+                tl = tl.model_copy(update={"clips": [c for c in tl.clips if not c.clip_id.startswith(SFX_PREFIX)]})
+                if len(tl.clips) == before:
+                    raise ValueError("there are no sound effects to remove")
+            else:
+                if not sfx:
+                    raise ValueError("the sound effects are not available")
+                tl, placed = add_sound_effects(tl, sfx, mood=guess_mood(tl), style="bold")
+                if not placed:
+                    raise ValueError("there are no transitions or flashes to put sound effects on yet "
+                                     "(try 'add zoom transitions' first)")
+                notes.append(f"{placed} sound effect{'s' if placed != 1 else ''} placed.")
         elif op.op == "set_look":
             mood = guess_mood(tl)
             looks = look_effects(op.look or "cinematic", mood, "auto")

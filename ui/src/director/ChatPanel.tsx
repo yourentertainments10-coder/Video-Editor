@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api, Asset, json, Project } from '../api';
-import { LOOK_NAMES, STYLE_NAMES } from '../timeline/AutoEditDialog';
+import { api, Asset, isSong, json, Project } from '../api';
+import { LOOK_NAMES, STYLE_NAMES, TITLE_ANIMATION_NAMES } from '../timeline/AutoEditDialog';
 import type { AutoEditRequest, EditStyle } from '../timeline/AutoEditDialog';
 import type { BriefResponse } from '../timeline/brief';
 import type { Timeline } from '../timeline/ops';
@@ -183,7 +183,7 @@ export function ChatPanel(props: Props) {
     }
     if (m.kind === 'brief' && m.brief) {
       const settings = m.brief;
-      const songs = assets.filter(a => a.kind === 'audio' || a.kind === 'music');
+      const songs = assets.filter(isSong);
       const ready = briefReady(settings);
       const change = (patch: Partial<BriefSettings>) => update(m.id, { brief: { ...settings, ...patch } });
       return <div className="change-card brief-card">
@@ -206,14 +206,15 @@ export function ChatPanel(props: Props) {
           {settings.transitionFamily && <><dt>Accents</dt><dd className="cap-first">{settings.transitionFamily} transitions</dd></>}
           {!!settings.preferTags?.length && <><dt>Shots</dt><dd className="cap-first">{tagNames(settings.preferTags)}</dd></>}
           {!!settings.avoidTags?.length && <><dt>Leave out</dt><dd className="cap-first">{tagNames(settings.avoidTags)}</dd></>}
-          {settings.title && <><dt>Title</dt><dd>“{settings.title}”</dd></>}
+          {settings.title && <><dt>Title</dt><dd>“{settings.title}”{settings.titleAnimation
+            ? ` · ${TITLE_ANIMATION_NAMES[settings.titleAnimation] ?? settings.titleAnimation}` : ''}</dd></>}
           {settings.profile && <><dt>Format</dt><dd>{PROFILE_NAMES[settings.profile] ?? settings.profile}</dd></>}
         </dl>
         {m.text && <p className="card-question">{m.text}</p>}
         {m.status === 'pending' && <div className="card-actions">
           <button className="primary" disabled={!ready || props.jobBusy} onClick={() => void startEdit(m, settings)}>
             {clipCount ? 'Replace current edit' : 'Create edit'}</button>
-          {!ready && !assets.some(a => a.kind === 'audio' || a.kind === 'music') && <button className="quiet" onClick={props.onAddMedia}>＋ Add media</button>}
+          {!ready && !assets.some(isSong) && <button className="quiet" onClick={props.onAddMedia}>＋ Add media</button>}
           <button className="quiet" onClick={() => props.onOpenAutoEdit(settings.mood)}>More options…</button>
         </div>}
         {m.status === 'pending' && clipCount > 0 && <p className="card-note">You can undo it afterwards.</p>}

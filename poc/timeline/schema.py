@@ -202,7 +202,7 @@ EffectId = Literal[
     # Phase 3: looks, textures, beat accents, repair
     "look_cinematic", "look_vintage", "look_warm", "look_cool", "look_punchy", "look_mono", "look_matte",
     "vignette", "grain", "sharpen", "glow", "rgb_split",
-    "flash", "shake", "zoom_punch", "stabilize",
+    "flash", "shake", "zoom_punch", "stabilize", "light_leak",
 ]
 
 
@@ -594,7 +594,7 @@ _EFFECT_PARAMETER_MODELS: dict[str, type[BaseModel]] = {
     **{effect_id: AmountParameters for effect_id in (
         "look_cinematic", "look_vintage", "look_warm", "look_cool", "look_punchy", "look_mono", "look_matte",
         "vignette", "grain", "sharpen", "glow", "rgb_split", "stabilize")},
-    **{effect_id: AccentParameters for effect_id in ("flash", "shake", "zoom_punch")},
+    **{effect_id: AccentParameters for effect_id in ("flash", "shake", "zoom_punch", "light_leak")},
 }
 
 
@@ -658,6 +658,7 @@ EFFECT_CATALOGUE: tuple[EffectMetadata, ...] = (
     EffectMetadata(effect_id="shake", name="Shake", parameter_schema=(_field_definition("at_ms", "integer", default=0, minimum=0, maximum=600000), _field_definition("duration_ms", "integer", default=300, minimum=1, maximum=5000), _field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0)), renderable=True, deterministic=True, behavior_contract="The camera shakes around at_ms for duration_ms (picture slightly enlarged to hide edges)."),
     EffectMetadata(effect_id="zoom_punch", name="Zoom Punch", parameter_schema=(_field_definition("at_ms", "integer", default=0, minimum=0, maximum=600000), _field_definition("duration_ms", "integer", default=300, minimum=1, maximum=5000), _field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0)), renderable=True, deterministic=True, behavior_contract="The picture jumps closer at at_ms and settles back over duration_ms."),
     EffectMetadata(effect_id="stabilize", name="Stabilize", parameter_schema=(_field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0),), renderable=True, deterministic=True, behavior_contract="Reduces camera shake (FFmpeg deshake) and enlarges slightly to hide moving edges."),
+    EffectMetadata(effect_id="light_leak", name="Light Leak", parameter_schema=(_field_definition("at_ms", "integer", default=0, minimum=0, maximum=600000), _field_definition("duration_ms", "integer", default=300, minimum=1, maximum=5000), _field_definition("amount", "number", default=0.6, minimum=0.0, maximum=1.0)), renderable=True, deterministic=True, behavior_contract="A warm glow washes over the picture at at_ms and fades over duration_ms, like light leaking into a film camera."),
 )
 
 

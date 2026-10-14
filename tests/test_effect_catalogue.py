@@ -145,7 +145,7 @@ def test_catalogue_declares_renderer_status_and_determinism():
         # Phase 3 (catalogue list updated with the owner's approval)
         "look_cinematic", "look_vintage", "look_warm", "look_cool", "look_punchy", "look_mono", "look_matte",
         "vignette", "grain", "sharpen", "glow", "rgb_split",
-        "flash", "shake", "zoom_punch", "stabilize",
+        "flash", "shake", "zoom_punch", "stabilize", "light_leak",
     ]
     assert all(item.renderable for item in EFFECT_CATALOGUE)
     assert all(entry.deterministic for entry in EFFECT_CATALOGUE)

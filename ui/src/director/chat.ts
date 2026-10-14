@@ -4,6 +4,7 @@
  * A message never carries a timeline: a proposed edit lives only in memory until the user
  * clicks Apply, and is shown as "expired" after a reload.
  */
+import { isSong } from '../api';
 import type { Asset } from '../api';
 import type { AutoEditRequest } from '../timeline/AutoEditDialog';
 import type { BriefResponse, Mood, TransitionPolicy } from '../timeline/brief';
@@ -18,6 +19,7 @@ export type BriefSettings = {
   transitionPolicy: TransitionPolicy; title: string | null; profile: string | null;
   preferTags?: string[]; avoidTags?: string[];
   style?: 'clean' | 'auto' | 'bold'; look?: string | null; transitionFamily?: string | null;
+  titleAnimation?: string | null;
 };
 
 /** Footage words the Director uses (tags from poc/perceive/shots.py). */
@@ -82,7 +84,7 @@ export const DEFAULT_DURATION_S = 30;
 /** Turn a parsed brief into the settings card the user confirms with one click. */
 export function briefReply(response: BriefResponse, assets: Asset[], previous?: BriefSettings): ChatMessage {
   const b = response.brief;
-  const songs = assets.filter(asset => asset.kind === 'audio' || asset.kind === 'music');
+  const songs = assets.filter(isSong);
   const videos = assets.filter(asset => asset.kind === 'video');
   const settings: BriefSettings = {
     musicAssetId: previous?.musicAssetId && songs.some(s => s.asset_id === previous.musicAssetId)
@@ -93,6 +95,7 @@ export function briefReply(response: BriefResponse, assets: Asset[], previous?: 
     style: b.style ?? previous?.style ?? 'auto',
     look: b.look ?? previous?.look ?? null,
     transitionFamily: b.transition_family ?? previous?.transitionFamily ?? null,
+    titleAnimation: b.title_animation ?? previous?.titleAnimation ?? undefined,
     avoidTags: b.avoid_tags?.length ? [...b.avoid_tags] : previous?.avoidTags ?? [],
     videoAssetIds: response.video_asset_ids.length ? [...response.video_asset_ids] : videos.map(v => v.asset_id),
     transitionPolicy: b.transition_policy !== 'auto' ? b.transition_policy : previous?.transitionPolicy ?? 'auto',
@@ -126,6 +129,7 @@ export function briefRequest(settings: BriefSettings): AutoEditRequest {
     musicAssetId: settings.musicAssetId, mood: settings.mood, durationS: settings.durationS,
     videoAssetIds: [...settings.videoAssetIds], transitionPolicy: settings.transitionPolicy, title: settings.title,
     style: settings.style ?? 'auto', look: settings.look ?? null, transitionFamily: settings.transitionFamily ?? null,
+    ...(settings.titleAnimation && settings.title ? { titleAnimation: settings.titleAnimation } : {}),
     ...(settings.preferTags?.length || settings.avoidTags?.length
       ? { shots: { prefer: [...(settings.preferTags ?? [])], avoid: [...(settings.avoidTags ?? [])] } } : {}),
   };
@@ -210,7 +214,7 @@ export function clipLinks(text: string, clipCount: number): Segment[] {
 /** Starter ideas shown under the composer, depending on where the project is. */
 export function suggestions(timeline: Timeline | null, assets: Asset[]): string[] {
   const hasVideo = assets.some(asset => asset.kind === 'video');
-  const hasSong = assets.some(asset => asset.kind === 'audio' || asset.kind === 'music');
+  const hasSong = assets.some(isSong);
   if (!hasVideo || !hasSong) return [];
   const clips = videoClipCount(timeline);
   if (!clips) return ['Make a 30 second energetic reel', 'Calm 20 second video with soft fades', '15 second reel, title "My trip"'];
@@ -221,7 +225,7 @@ export function suggestions(timeline: Timeline | null, assets: Asset[]): string[
 /** Shown when a project's conversation is empty (never saved). */
 export function greeting(timeline: Timeline | null, assets: Asset[]): string[] {
   const hasVideo = assets.some(asset => asset.kind === 'video');
-  const hasSong = assets.some(asset => asset.kind === 'audio' || asset.kind === 'music');
+  const hasSong = assets.some(isSong);
   const lines = ['Hi, I\'m the Director. I work only on this computer — nothing is uploaded.'];
   if (!hasVideo || !hasSong) lines.push('Add your videos and a song with ＋ Add media, then tell me what video you want.');
   else if (!videoClipCount(timeline)) lines.push('Tell me what video you want — length, mood, format, transitions, a title — and I\'ll cut it to the beat of your song.');

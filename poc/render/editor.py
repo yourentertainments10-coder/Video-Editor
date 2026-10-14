@@ -23,7 +23,7 @@ from poc.render.aspect import fit_to_frame_to_file
 from poc.render.audio import encode_delivery_audio, render_audio_track
 from poc.render.export import ExportProfile, VerifyReport, get_profile, verify_render
 from poc.render.effects import build_effect_filters
-from poc.render.text import TextOverlay, _FONTS_DIR, _ass_filter, _write_ass
+from poc.render.text import ANIMATIONS, TextOverlay, _FONTS_DIR, _HEX_COLOR, _ass_filter, _write_ass
 from poc.render.transitions import Join, Segment, render_sequence_to_file
 from poc.timeline import (
     AudioProperties,
@@ -120,6 +120,25 @@ _TRANSITION_MAP = {
         "squeeze", "slice", "wind", "diagonal", "fade_mono")},
 }
 
+
+
+def _title_style(metadata: dict | None) -> dict:
+    """TextOverlay settings from a text asset's ``metadata["title_style"]`` (set by the Director or
+    the Inspector). Unknown or broken values fall back to the plain fade instead of failing a render."""
+    style = (metadata or {}).get("title_style")
+    if not isinstance(style, dict):
+        return {}
+    out: dict = {}
+    if style.get("animation") in ANIMATIONS:
+        out["animation"] = style["animation"]
+    for key in ("color", "accent"):
+        value = style.get(key)
+        if isinstance(value, str) and _HEX_COLOR.fullmatch(value):
+            out[key] = value
+    size = style.get("size_pct")
+    if isinstance(size, (int, float)) and not isinstance(size, bool) and math.isfinite(size) and 0.02 <= size <= 0.2:
+        out["size_pct"] = float(size)
+    return out
 
 def _frame(tick: int, fps: int, ticks_per_second: int) -> int:
     return round(tick * fps / ticks_per_second)
@@ -403,6 +422,7 @@ class EditorRenderer:
                 end_ms=round(end_frame * 1000 / fps),
                 x=x,
                 y=y,
+                **_title_style(asset.metadata),
             ))
 
         audio_placements: list[AudioPlacement] = []
@@ -752,7 +772,11 @@ class EditorRenderer:
                                         bold=overlay.bold,
                                         fade_in_ms=fade_in_ms,
                                         fade_out_ms=fade_out_ms,
-                                        font=overlay.font
+                                        font=overlay.font,
+                                        animation=overlay.animation,
+                                        accent=overlay.accent,
+                                        elapsed_ms=overlay.elapsed_ms + max(
+                                            0, (chunk_start_frame_abs - overlay_start_frame) * 1000 // plan.fps),
                                     )
                                     chunk_overlays.append(adjusted_overlay)
 

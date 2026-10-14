@@ -111,6 +111,25 @@ clear "I don't understand X; try one of: …" instead of a guess.
   cinematic look").
 - The self-check runs every effect and transition through the bundled FFmpeg.
 
+## Implementation status (titles, light leaks and sound effects, phase 3b)
+
+- Animated titles (`poc/render/text.py`, drawn by libass in the bundled FFmpeg): simple fade,
+  pop, slide up, typewriter, words pop in, neon glow and a lower-third name bar. The choice is
+  stored on the text asset as `metadata.title_style = {animation, by, color?, accent?, size_pct?}`;
+  the renderer ignores values it does not know. A title that crosses a render chunk continues
+  without playing its entrance again (`elapsed_ms`).
+- The style pass picks a title animation for the mood (energetic: pop, or words pop in for long
+  titles; calm: slide up or typewriter; calm + bold: neon glow) unless the user chose one, and
+  "clean" goes back to the simple fade. The Inspector has an Animation picker and a colour.
+- Chat and briefs: "title 'Goa' with a typewriter effect", "make the title pop", "lower third
+  'Rahul Sharma'", "words popping in", "neon title", "title without animation". Words like "pop"
+  or "glow" count only next to "title"/"text", so "pop song" or "make it pop" are not titles.
+- Light leak effect (warm screen-blended flare) on calm accents instead of every transition.
+- Sound effects made on this computer (`poc/render/sfx.py`, numpy, deterministic, no downloads):
+  whoosh, soft whoosh, impact, riser. Placed on the voice track at transitions and the drop,
+  never over the user's own voice clips; hidden from the media bin; "remove the sound effects".
+- Footage questions: "which clips have faces?", "clips that don't have people".
+
 ## 2. Components
 
 ```

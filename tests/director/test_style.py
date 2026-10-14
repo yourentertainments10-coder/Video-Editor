@@ -113,3 +113,48 @@ def test_look_choice_and_mood_guess():
     assert guess_mood(tl) == "energetic" and guess_mood(timeline(n=6, clip_ms=2000)) == "calm"
     with pytest.raises(ValueError):
         plan_style(tl, mood="energetic", look="sunset")
+
+
+def _sfx():
+    from poc.render.sfx import SOUNDS
+    return {name: MediaAsset(asset_id=f"sfx_{name}", kind="audio", uri=f"/sfx/{name}.wav", duration_ms=ms)
+            for name, (ms, _) in SOUNDS.items()}
+
+
+def test_sound_effects_follow_transitions_and_the_drop():
+    tl = timeline(n=40)
+    styled, notes = plan_style(tl, mood="energetic", style="bold", sfx=_sfx())
+    sounds = sorted((c for c in styled.clips if c.clip_id.startswith("sfx_")), key=lambda c: c.start_tick)
+    names = [c.clip_id.split("_", 2)[2] for c in sounds]
+    assert "whoosh" in names and "impact" in names and "riser" in names
+    flash_clip = next(c for c in video_clips(styled) if any(e.effect_id == "flash" for e in c.effects))
+    impact = next(c for c in sounds if c.clip_id.endswith("impact"))
+    assert impact.start_tick == flash_clip.start_tick
+    for a, b in zip(sounds, sounds[1:]):
+        assert a.start_tick + a.duration_ticks <= b.start_tick              # never on top of each other
+    assert all(c.track_id == "voice" and c.audio.gain_db < 0 for c in sounds)
+    assert {f"sfx_{n}" for n in names} <= {a.asset_id for a in styled.assets}
+    assert validate_editor_timeline(styled) == []
+    assert any("sound effect" in n for n in notes)
+    clean = clear_style(styled)
+    assert not any(c.clip_id.startswith("sfx_") for c in clean.clips)
+    again, _ = plan_style(styled, mood="energetic", style="bold", sfx=_sfx())
+    assert again == styled                                                     # re-styling does not stack
+
+
+def test_sound_effects_leave_the_users_voice_clips_alone():
+    tl = timeline(n=40)
+    voice = EditorClip(clip_id="my_voice", asset_id="m", track_id="voice", start_tick=0, duration_ticks=20000,
+                       source_in_ms=0, source_out_ms=20000)
+    tl = tl.model_copy(update={"clips": tl.clips + [voice]})
+    styled, _ = plan_style(tl, mood="energetic", style="bold", sfx=_sfx())
+    assert not any(c.clip_id.startswith("sfx_") for c in styled.clips)
+    assert any(c.clip_id == "my_voice" for c in styled.clips)
+
+
+def test_calm_style_alternates_soft_transitions_and_light_leaks():
+    styled, notes = plan_style(timeline(n=30, clip_ms=2000, beat_ms=500), mood="calm", style="auto")
+    clips = video_clips(styled)
+    assert any(c.transition for c in clips)
+    assert any(e.effect_id == "light_leak" for c in clips for e in c.effects)
+    assert any("light leak" in n for n in notes)

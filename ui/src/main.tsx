@@ -351,6 +351,7 @@ function App() {
         ...(request.shots ? { shots: request.shots } : {}),
         style: request.style ?? 'auto', ...(request.look ? { look: request.look } : {}),
         ...(request.transitionFamily ? { transition_family: request.transitionFamily } : {}),
+        ...(request.titleAnimation ? { title_animation: request.titleAnimation } : {}),
       }));
       setJob({ job_id: result.job_id, status: 'queued', progress: 0, message: 'Queued', output: null, report: null, error: null });
       setAutoEditStatus({ status: 'queued', progress: 0, message: 'Queued', error: null });
@@ -404,8 +405,8 @@ function App() {
             onSelectClip={selectClipNumber} onAddMedia={() => void addMedia()}/>
           <div className="editor-column">
           <div className="page-heading"><div><p className="eyebrow">PROJECT</p><h1>{project.name}</h1></div><button className="primary" onClick={() => void addMedia()}>＋ Add media</button></div>
-          <div className="media-section"><div className="section-head"><div><h2>Media bin</h2><span>{assets.length} items</span></div><button className="quiet" onClick={() => void openProject(project)}>↻</button></div>
-            <div className="media-grid">{assets.map(asset => <button key={asset.asset_id} className={`media-card ${selectedAsset?.asset_id === asset.asset_id ? 'chosen' : ''}`} draggable onDragStart={event => { event.dataTransfer.setData('application/x-editor-asset', asset.asset_id); event.dataTransfer.effectAllowed = 'copy'; }} onClick={() => { setSelectedAsset(asset); setPreviewRender(''); }}>
+          <div className="media-section"><div className="section-head"><div><h2>Media bin</h2><span>{assets.filter(a => !a.generated).length} items</span></div><button className="quiet" onClick={() => void openProject(project)}>↻</button></div>
+            <div className="media-grid">{assets.filter(a => !a.generated).map(asset => <button key={asset.asset_id} className={`media-card ${selectedAsset?.asset_id === asset.asset_id ? 'chosen' : ''}`} draggable onDragStart={event => { event.dataTransfer.setData('application/x-editor-asset', asset.asset_id); event.dataTransfer.effectAllowed = 'copy'; }} onClick={() => { setSelectedAsset(asset); setPreviewRender(''); }}>
               <div className="thumb">{asset.thumbnail_count > 0 ? <img src={thumbnailUrl(project.project_id, asset.asset_id)} alt=""/> : <span>♫</span>}<b>{asset.kind.toUpperCase()}</b></div>
               <strong title={asset.file_name}>{asset.file_name}</strong><small>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : asset.kind} {asset.fps ? `· ${asset.fps.toFixed(1)} fps` : ''}</small>
               <div className="badges">{asset.hdr && <em>HDR</em>}{asset.rotation ? <em>ROTATED</em> : null}{asset.has_audio && <em>AUDIO</em>}</div>
