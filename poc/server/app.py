@@ -54,6 +54,11 @@ def _project_root(data_dir: Path, project_id: str) -> Path:
     return root
 
 
+# Bump together with API_LEVEL in ui/src/api.ts whenever endpoints change, so a page built
+# for a newer server can tell the user to restart an old one (instead of failing with 404).
+API_LEVEL = 3   # 1: U1-U4, 2: Local Director briefs (LD-1), 3: revisions (LD-2)
+
+
 def _library(root: Path) -> ProjectAssetLibrary:
     return ProjectAssetLibrary.load(root)
 
@@ -179,7 +184,7 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
 
     @app.get("/api/health")
     def health():
-        return {"ok": True}
+        return {"ok": True, "api_level": API_LEVEL}
 
     @app.post("/api/projects", status_code=201)
     def create_project(body: dict[str, Any]):

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, Asset, assetAudioUrl, EditorCatalogue, Job, json, Project, saveTimeline, thumbnailUrl } from './api';
+import { api, apiLevelProblem, Asset, assetAudioUrl, EditorCatalogue, Job, json, Project, saveTimeline, thumbnailUrl } from './api';
 import { Inspector } from './timeline/Inspector';
 import { exportAdvice } from './exportAdvice';
 import { PreviewPlayer } from './timeline/PreviewPlayer';
@@ -86,7 +86,11 @@ function App() {
       await runCheck(value.project_id);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setSaveMessage(''); }
   };
-  useEffect(() => { void refreshProjects().catch(e => setError(String(e))); }, []);
+  useEffect(() => { void refreshProjects().catch(e => setError(e instanceof Error ? e.message : String(e))); }, []);
+  const [serverProblem, setServerProblem] = useState<string | null>(null);
+  useEffect(() => {
+    void api<{ api_level?: number }>('/api/health').then(h => setServerProblem(apiLevelProblem(h.api_level))).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (!project || !timeline || !dirty.current) return;
@@ -400,6 +404,7 @@ function App() {
             </section>
           </div>
         </>}
+        {serverProblem && <div className="error-banner server-banner" role="alert"><span>{serverProblem}</span></div>}
         {error && !error.startsWith('Clip') && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
       </section>
     </div>
