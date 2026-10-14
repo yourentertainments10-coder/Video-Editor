@@ -683,8 +683,8 @@ class EditorRenderer:
                         # Calculate chunk timing
                         vs_segments = [item[0] for item in resolved_segments[chunk_start:chunk_end]]
                         chunk_start_frames = sum(
-                            vs.duration_frames for vs in resolved_segments[0:chunk_start]
-                        )
+                            vs.duration_frames for vs in vs_segments[0:chunk_start]
+                        ) if chunk_start > 0 else 0
                         chunk_duration_frames = sum(
                             vs.duration_frames for vs in vs_segments
                         )
@@ -714,11 +714,13 @@ class EditorRenderer:
                                         fade_out_ms = 0
 
                                     # Create adjusted overlay for this chunk
+                                    adjusted_start = max(0, (overlay_start_frame - chunk_start_frame_abs) * 1000 // plan.fps)
+                                    adjusted_end = min(chunk_duration_frames * 1000 // plan.fps,
+                                                       (overlay_end_frame - chunk_start_frame_abs) * 1000 // plan.fps)
                                     adjusted_overlay = TextOverlay(
                                         text=overlay.text,
-                                        start_ms=max(0, (overlay_start_frame - chunk_start_frame_abs) * 1000 // plan.fps),
-                                        end_ms=min(chunk_duration_frames * 1000 // plan.fps,
-                                                   (overlay_end_frame - chunk_start_frame_abs) * 1000 // plan.fps),
+                                        start_ms=adjusted_start,
+                                        end_ms=adjusted_end,
                                         x=overlay.x,
                                         y=overlay.y,
                                         size_pct=overlay.size_pct,

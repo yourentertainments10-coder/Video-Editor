@@ -116,10 +116,6 @@ def test_title_crossing_a_chunk_boundary_stays_continuous(tmp_path, commands):
     white = [int((f.min(axis=2) > 200).sum()) for f in frames]
     assert white[50] == 0 and white[125] == 0
     assert all(white[i] > 100 for i in range(64, 110)), [i for i in range(64, 110) if white[i] <= 100]
-    # Debug: print commands for video encodes
-    encodes = [c for c in commands if "libx264" in c]
-    for i, cmd in enumerate(encodes):
-        print(f"Encode {i}: {' '.join(cmd)}")
 
 
 def test_chunked_render_is_deterministic(tmp_path, commands):
