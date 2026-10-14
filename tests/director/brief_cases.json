@@ -1,0 +1,1255 @@
+{
+ "assets": [
+  "beach.mp4",
+  "IMG_0412.MOV",
+  "sunset clip.mp4",
+  "drone_01.mp4",
+  "WhatsApp Video 2026-10-01 at 12.30.45.mp4"
+ ],
+ "cases": [
+  {
+   "text": "20 second energetic reel",
+   "expect": {
+    "duration_s": 20.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "calm 30s landscape video, no transitions",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "16:9",
+    "mood": "calm",
+    "transition_policy": "cuts_only"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 seconds youtube energetic",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "16:9",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "45 sec reel calm",
+   "expect": {
+    "duration_s": 45.0,
+    "aspect": "9:16",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "15s story upbeat",
+   "expect": {
+    "duration_s": 15.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "60-second square video, chill",
+   "expect": {
+    "duration_s": 60.0,
+    "aspect": "1:1",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "a 2 minute landscape montage, relaxed",
+   "expect": {
+    "duration_s": 120.0,
+    "aspect": "16:9",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "1.5 min horizontal party video",
+   "expect": {
+    "duration_s": 90.0,
+    "aspect": "16:9",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "1 min 30 sec reel, hype",
+   "expect": {
+    "duration_s": 90.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "1m30s widescreen calm edit",
+   "expect": {
+    "duration_s": 90.0,
+    "aspect": "16:9",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "1:30 youtube video, chill vibe",
+   "expect": {
+    "duration_s": 90.0,
+    "aspect": "16:9",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "0:45 vertical video fast",
+   "expect": {
+    "duration_s": 45.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "half a minute dance reel",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "a minute long tiktok, upbeat",
+   "expect": {
+    "duration_s": 60.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "one minute peaceful youtube video",
+   "expect": {
+    "duration_s": 60.0,
+    "aspect": "16:9",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "thirty seconds square, energetic",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "1:1",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "twenty five seconds reel, romantic",
+   "expect": {
+    "duration_s": 25.0,
+    "aspect": "9:16",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "twenty-five second vertical upbeat video",
+   "expect": {
+    "duration_s": 25.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "ten second shorts, action",
+   "expect": {
+    "duration_s": 10.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "two minutes landscape cinematic",
+   "expect": {
+    "duration_s": 120.0,
+    "aspect": "16:9",
+    "mood": "calm",
+    "transition_policy": "soft"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "3 mins youtube, mellow",
+   "expect": {
+    "duration_s": 180.0,
+    "aspect": "16:9",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "90 secs reel, intense",
+   "expect": {
+    "duration_s": 90.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "10 minutes youtube calm",
+   "expect": {
+    "aspect": "16:9",
+    "mood": "calm",
+    "duration_s": 600.0
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "11 minutes youtube calm",
+   "expect": {
+    "aspect": "16:9",
+    "mood": "calm"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "0.5 second reel fast",
+   "expect": {
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "20 or 30 second reel",
+   "expect": {
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "energetic reel",
+   "expect": {
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "bees second ki tez reel bana do",
+   "expect": {
+    "duration_s": 20.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "tees second ka shaant video youtube ke liye",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "16:9",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": [
+    "liye"
+   ]
+  },
+  {
+   "text": "ek minute ki josh wali reel",
+   "expect": {
+    "duration_s": 60.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "aadha minute ka square video, sukoon wala",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "1:1",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "das second ki story, masti",
+   "expect": {
+    "duration_s": 10.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "pandrah second ki reel, dheema",
+   "expect": {
+    "duration_s": 15.0,
+    "aspect": "9:16",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "do minute ka landscape video, aaram se",
+   "expect": {
+    "duration_s": 120.0,
+    "aspect": "16:9",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "saath second ki reel bina transition",
+   "expect": {
+    "duration_s": 60.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "cuts_only"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "20 sec reel sirf cuts",
+   "expect": {
+    "duration_s": 20.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "cuts_only"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second ki dhamakedar reel",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second instagram reel",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second youtube shorts video",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second short for youtube shorts",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": [
+    "short"
+   ]
+  },
+  {
+   "text": "30 second portrait clip",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second 9:16 edit",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second 16:9 edit",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "16:9",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second 1:1 edit",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "1:1",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second 9x16 edit",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second feed post",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "1:1",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second instagram post square",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "1:1",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second story",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second horizontal",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "16:9",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second video",
+   "expect": {
+    "duration_s": 30.0,
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second reel for youtube",
+   "expect": {
+    "duration_s": 30.0,
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30 second square reel",
+   "expect": {
+    "duration_s": 30.0,
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, chill and relaxed",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, fast and upbeat",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, fast but calm",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, not too slow",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, not fast",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, nahi tez",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, emotional",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, soothing and gentle",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, high energy",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, fast-paced",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, lively, exciting",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, vibey",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": [
+    "vibey"
+   ]
+  },
+  {
+   "text": "30s reel, punchy",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "cuts_only"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, dreamy",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "calm",
+    "transition_policy": "soft"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel with smooth transitions",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "soft"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel with soft transitions",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "soft"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel with crossfades",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "soft"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel with fades, calm",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "calm",
+    "transition_policy": "soft"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, hard cuts",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "cuts_only"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, just cuts",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "cuts_only"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, straight cuts only",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "cuts_only"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel without transitions",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "cuts_only"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, no fades",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "cuts_only"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, smooth fades but hard cuts",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, punchy with smooth transitions",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, dissolve between shots",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "soft"
+   },
+   "questions": 0,
+   "unknown_words": [
+    "between",
+    "shots"
+   ]
+  },
+  {
+   "text": "30s reel, title 'Goa 2026'",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "Goa 2026"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, title \"Goa 2026\"",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "Goa 2026"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, title: Goa 2026",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "Goa 2026"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, title “Goa Trip”",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "Goa Trip"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, heading: Rohan's Birthday",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "Rohan's Birthday"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, caption 'Fast & Calm'",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "Fast & Calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, title is 'Summer'",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "Summer"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, text saying 'Happy Diwali'",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "Happy Diwali"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, naam 'Mumbai Diaries'",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "Mumbai Diaries"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, title 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, title 'calm 60 seconds youtube'",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "calm 60 seconds youtube"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, skip beach.mp4",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "exclude": [
+     "beach.mp4"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel without beach",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "exclude": [
+     "beach.mp4"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, exclude IMG_0412",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "exclude": [
+     "IMG_0412.MOV"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, only use IMG_0412",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "only": [
+     "IMG_0412.MOV"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, just beach.mp4 and sunset clip",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "only": [
+     "beach.mp4"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, only beach and only sunset clip",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "only": [
+     "beach.mp4",
+     "sunset clip.mp4"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, use drone_01",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, sirf drone_01 use karo",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "only": [
+     "drone_01.mp4"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, beach.mp4 mat lagao",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": [
+    "lagao"
+   ]
+  },
+  {
+   "text": "30s reel, skip WhatsApp Video 2026-10-01 at 12.30.45",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "exclude": [
+     "WhatsApp Video 2026-10-01 at 12.30.45.mp4"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, skip beach, but use sunset clip",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "exclude": [
+     "beach.mp4"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel, remove drone_01 and skip beach",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "exclude": [
+     "drone_01.mp4",
+     "beach.mp4"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel with slow motion",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel in black and white",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel with subtitles",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "30s reel with voice over",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "Make me a 20 second energetic Instagram reel from my Goa trip, no transitions, title 'Goa 2026'",
+   "expect": {
+    "duration_s": 20.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "transition_policy": "cuts_only",
+    "title": "Goa 2026"
+   },
+   "questions": 0,
+   "unknown_words": [
+    "goa"
+   ]
+  },
+  {
+   "text": "I need a calm 45 second landscape video for YouTube with smooth fades",
+   "expect": {
+    "duration_s": 45.0,
+    "aspect": "16:9",
+    "mood": "calm",
+    "transition_policy": "soft"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "Please create a cinematic 1 minute wedding film in 16:9, skip IMG_0412",
+   "expect": {
+    "duration_s": 60.0,
+    "aspect": "16:9",
+    "mood": "calm",
+    "transition_policy": "soft",
+    "exclude": [
+     "IMG_0412.MOV"
+    ]
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "Birthday party reel, 30 secs, upbeat, heading: Rohan Turns 30",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "9:16",
+    "mood": "energetic",
+    "title": "Rohan Turns 30"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "square 15 second loop for the feed, chill",
+   "expect": {
+    "duration_s": 15.0,
+    "aspect": "1:1",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": [
+    "loop",
+    "feed"
+   ]
+  },
+  {
+   "text": "",
+   "expect": {},
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "   ",
+   "expect": {},
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "banana",
+   "expect": {
+    "mood": "energetic"
+   },
+   "questions": 2,
+   "unknown_words": [
+    "banana"
+   ]
+  },
+  {
+   "text": "twenty five or thirty seconds reel",
+   "expect": {
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "20-30 sec reel",
+   "expect": {
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 1,
+   "unknown_words": []
+  },
+  {
+   "text": "1:30 9:16 reel",
+   "expect": {
+    "duration_s": 90.0,
+    "aspect": "9:16",
+    "mood": "energetic"
+   },
+   "questions": 0,
+   "unknown_words": []
+  },
+  {
+   "text": "half a minute 16:9 video, calm",
+   "expect": {
+    "duration_s": 30.0,
+    "aspect": "16:9",
+    "mood": "calm"
+   },
+   "questions": 0,
+   "unknown_words": []
+  }
+ ]
+}

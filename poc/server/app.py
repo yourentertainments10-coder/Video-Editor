@@ -19,6 +19,9 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from poc.director import AssetRef, parse_brief, selected_video_ids
+from poc.director.apply import apply_style
+from poc.director.brief import MAX_TITLE_CHARS
 from poc.resources import ui_dist_dir
 from poc.decide import CutterError, GridError, cut
 from poc.editor_bridge import legacy_to_editor
@@ -352,6 +355,20 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "error": None}
 
+    @app.post("/api/projects/{pid}/brief")
+    def read_brief(pid: str, body: dict[str, Any]):
+        """Local Director: understand a written brief (offline, rule-based). Changes nothing."""
+        text = body.get("text")
+        if not isinstance(text, str) or len(text) > 1000:
+            raise HTTPException(422, "text must be a string of at most 1000 characters")
+        library = _library(_project_root(data_dir, pid))
+        refs = [AssetRef(asset_id=item.asset_id, file_name=Path(item.source_path).name, kind=item.kind)
+                for item in library.project.assets]
+        result = parse_brief(text, refs)
+        payload = result.model_dump()
+        payload["video_asset_ids"] = selected_video_ids(result.brief, refs)
+        return payload
+
     @app.post("/api/projects/{pid}/auto-edit", status_code=202)
     def auto_edit(pid: str, body: dict[str, Any]):
         root = _project_root(data_dir, pid)
@@ -372,6 +389,13 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
             raise HTTPException(422, "duration_s must be greater than zero")
         if not isinstance(music_asset_id, str) or not music_asset_id:
             raise HTTPException(422, "music_asset_id is required")
+        transition_policy = body.get("transition_policy", "auto")
+        if transition_policy not in ("auto", "cuts_only", "soft"):
+            raise HTTPException(422, "transition_policy must be 'auto', 'cuts_only' or 'soft'")
+        title = body.get("title")
+        if title is not None and (not isinstance(title, str) or not title.strip() or len(title) > MAX_TITLE_CHARS):
+            raise HTTPException(422, f"title must be 1-{MAX_TITLE_CHARS} characters")
+        title = title.strip() if title else None
         if video_asset_ids is not None and (
             not isinstance(video_asset_ids, list)
             or not all(isinstance(asset_id, str) for asset_id in video_asset_ids)
@@ -460,6 +484,8 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
                     settings=current.settings,
                     timeline_id=current.timeline_id,
                 )
+                editor_timeline = apply_style(editor_timeline, transition_policy=transition_policy,
+                                              title=title)
                 with app.state.timeline_lock:
                     latest = EditorTimeline.load(root / "timeline.json")
                     if latest.revision != base_revision:

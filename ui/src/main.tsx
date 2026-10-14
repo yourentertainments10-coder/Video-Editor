@@ -14,7 +14,8 @@ const EXPORT_SIZES: Record<string, { name: string; width: number; height: number
 };
 import { TimelineEditor } from './timeline/TimelineEditor';
 import { addTextClip, deleteClip, splitAt, Timeline, TimelineClip } from './timeline/ops';
-import { AutoEditDialog } from './timeline/AutoEditDialog';
+import { AutoEditDialog, AutoEditRequest } from './timeline/AutoEditDialog';
+import { BriefResponse } from './timeline/brief';
 import { canRedo, canUndo, createHistory, History, push, redo, undo } from './timeline/history';
 import { commandForKey } from './timeline/keys';
 import { formatTimecode, nextEditPoint, playbackSource, stepFrames } from './timeline/navigation';
@@ -298,7 +299,11 @@ function App() {
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
   }, [timeline, playhead, playing, selectedClipId, project, revision]);
-  const startAutoEdit = async (request: { musicAssetId: string; mood: 'energetic' | 'calm'; durationS: number; videoAssetIds: string[] }) => {
+  const readBrief = async (text: string): Promise<BriefResponse> => {
+    if (!project) throw new Error('No project open');
+    return api<BriefResponse>(`/api/projects/${project.project_id}/brief`, json('POST', { text }));
+  };
+  const startAutoEdit = async (request: AutoEditRequest) => {
     if (!project || !timeline) return;
     setAutoEditError(null);
     autoEditJob.current = true;
@@ -306,6 +311,7 @@ function App() {
       const result = await api<{ job_id: string }>(`/api/projects/${project.project_id}/auto-edit`, json('POST', {
         base_revision: revision, music_asset_id: request.musicAssetId, mood: request.mood,
         duration_s: request.durationS, video_asset_ids: request.videoAssetIds,
+        transition_policy: request.transitionPolicy, ...(request.title ? { title: request.title } : {}),
       }));
       setJob({ job_id: result.job_id, status: 'queued', progress: 0, message: 'Queued', output: null, report: null, error: null });
     } catch (e) { autoEditJob.current = false; setAutoEditError(e instanceof Error ? e.message : String(e)); }
@@ -391,6 +397,7 @@ function App() {
       active={!!job && ['queued', 'running'].includes(job.status) && autoEditJob.current}
       progress={job?.progress ?? 0} message={job?.message ?? 'Queued'} error={autoEditError}
       onStart={request => void startAutoEdit(request)}
+      onReadBrief={readBrief} onProfile={setProfile}
       onCancel={() => { if (job) void api(`/api/jobs/${job.job_id}/cancel`, json('POST', {})); }}
       onClose={() => { setShowAutoEdit(false); setAutoEditError(null); }}/ >}
     {showShortcuts && <div className="modal-backdrop" role="presentation" onClick={() => setShowShortcuts(false)}><section className="panel shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" onClick={event => event.stopPropagation()}>

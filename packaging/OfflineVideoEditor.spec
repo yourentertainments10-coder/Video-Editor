@@ -14,6 +14,7 @@ if not (UI_DIST / "index.html").is_file():
 datas = [
     (str(UI_DIST), "ui/dist"),
     (str(FONTS), "assets/fonts"),
+    (str(ROOT / "poc" / "director" / "lexicon.json"), "poc/director"),   # Local Director data
 ]
 datas += collect_data_files("imageio_ffmpeg", include_py_files=False)  # bundled ffmpeg binary
 datas += collect_data_files("librosa")

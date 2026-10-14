@@ -1,6 +1,7 @@
 # Local Director: Offline Brief and Revision Engine
 
-Version 1.0, 2026-10-10. Status: **design, not implemented.** Replaces the
+Version 1.1, 2026-10-14. Status: **briefs (Section 3) implemented as LD-1;
+revisions (Section 4) not yet.** Replaces the
 cloud "Director" and "Reviser" model roles in `ARCHITECTURE.md` Sections 8,
 11 and 14, in line with `OFFLINE_POLICY.md`. Implementation belongs to P4 in
 `todo.md`.
@@ -15,6 +16,23 @@ section, marker), and a few dozen style words. A deterministic parser with a
 data-driven lexicon covers that space, is reproducible, costs nothing, and
 can be tested exhaustively. Anything it cannot parse is answered with a
 clear "I don't understand X; try one of: …" instead of a guess.
+
+## Implementation status (LD-1)
+
+- `poc/director/brief.py` (`parse_brief`) and `poc/director/lexicon.json` (the lexicon is
+  JSON, not YAML, so no extra dependency is needed). `poc/director/apply.py` applies the
+  brief's transitions and title to the auto-edit result, because the frozen v0 cutter only
+  takes a mood and a length.
+- Understood: length (digits, words, Hinglish numbers, `m:ss`, ranges become questions),
+  format (reel/story/shorts/youtube/square/ratios), mood (with negation), transitions
+  (cuts only / soft fades), title, and only/skip for videos named by file name. Unknown
+  words and unsupported wishes (slow motion, colour looks, subtitles, voice-over) are
+  reported back instead of being ignored.
+- `POST /api/projects/{pid}/brief` returns the parsed brief and changes nothing; the
+  auto-edit dialog fills its fields from it. `POST .../auto-edit` accepts
+  `transition_policy` and `title`.
+- Tests: `tests/director/brief_cases.json` (118 golden sentences) and
+  `tests/director/test_*.py`.
 
 ## 2. Components
 

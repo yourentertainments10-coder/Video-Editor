@@ -163,11 +163,19 @@ def self_check(folder: Path) -> dict:
         import numpy  # noqa: F401
         return "av, cv2, librosa, numpy"
 
+    def director():
+        from poc.director import parse_brief
+        brief = parse_brief("20 second energetic reel").brief
+        if (brief.duration_s, brief.aspect, brief.mood) != (20.0, "9:16", "energetic"):
+            raise RuntimeError(f"brief parser gave {brief}")
+        return "brief parser ok"
+
     record("ui", ui)
     record("fonts", fonts)
     record("ffmpeg", ffmpeg)
     record("data_dir", data)
     record("libraries", libraries)
+    record("director", director)
     return {"ok": all(item["ok"] for item in results.values()), "frozen": is_frozen(),
             "checks": results}
 
