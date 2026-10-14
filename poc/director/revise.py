@@ -1,0 +1,556 @@
+"""Local Director, part 2: written revisions -> timeline operations (docs/LOCAL_DIRECTOR.md §4).
+
+``parse_revision(text, timeline)`` reads one instruction ("remove clip 3", "shorten the intro
+by 2 seconds", "add fades", "make clip 2 brighter", "title 'Goa' at the end", "undo") and
+returns typed operations plus a plain-language summary. ``apply_operations`` turns them
+into a NEW timeline; nothing is saved here. The UI shows the summary, and Apply goes
+through the normal edit path (autosave + undo).
+
+Rules (as for briefs): deterministic, closed set of intents, references are resolved
+against the real timeline and never invented; anything unclear becomes a question.
+Clips are numbered 1..N in time order on the video track (the UI shows these numbers).
+"""
+from __future__ import annotations
+
+import re
+import statistics
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+from poc.director.apply import TITLE_ASSET_ID, TITLE_CLIP_ID, TITLE_MS, apply_style
+from poc.director.brief import MAX_TITLE_CHARS, _normalise, _words_to_numbers
+from poc.timeline import EditorClip, EditorTimeline, EffectRef, MediaAsset, TransitionRef
+
+Intent = Literal["remove", "trim", "length", "transition", "look", "motion", "title", "undo", "redo",
+                 "explain", "retime", "unsupported", "unknown"]
+
+MIN_CLIP_MS = 200
+FADE_MS = 400
+BRIGHTNESS_STEP = 0.15
+CONTRAST_STEP = 1.25
+SATURATION_STEP = 1.3
+BLUR_RADIUS = 6.0
+ZOOM_SCALE = 1.2
+
+ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7,
+            "eighth": 8, "ninth": 9, "tenth": 10, "pehla": 1, "pehli": 1, "doosra": 2, "doosri": 2,
+            "dusra": 2, "dusri": 2, "teesra": 3, "teesri": 3}
+CLIP_WORDS = r"(?:clip|clips|shot|shots|scene|scenes)"
+
+
+class Operation(BaseModel):
+    """One change. ``op`` decides which fields are used."""
+
+    op: Literal["remove_clips", "trim_clip", "set_length", "set_transitions", "set_transition",
+                "adjust_look", "clear_look", "add_motion", "set_title", "remove_title"]
+    clip_ids: list[str] = Field(default_factory=list)
+    side: Literal["start", "end"] | None = None
+    ms: int | None = None
+    policy: Literal["soft", "cuts_only"] | None = None
+    transition: Literal["fade"] | None = None
+    effect_id: str | None = None
+    amount: float | None = None
+    text: str | None = None
+    at: Literal["start", "end"] | None = None
+
+
+class RevisionResult(BaseModel):
+    intent: Intent
+    operations: list[Operation] = Field(default_factory=list)
+    summary: list[str] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
+    answer: str | None = None
+    mood: Literal["energetic", "calm"] | None = None     # for intent "retime"
+
+
+# ---------------------------------------------------------------- timeline helpers
+
+def video_clips(tl: EditorTimeline) -> list[EditorClip]:
+    return sorted((c for c in tl.clips if c.track_id == "video"), key=lambda c: c.start_tick)
+
+
+def _ms(tl: EditorTimeline, ticks: float) -> float:
+    return ticks * 1000 / tl.time_base.ticks_per_second
+
+
+def _ticks(tl: EditorTimeline, ms: float) -> int:
+    return int(round(ms * tl.time_base.ticks_per_second / 1000))
+
+
+def _frame_ms(tl: EditorTimeline) -> float:
+    return 1000 * tl.settings.fps_den / tl.settings.fps_num
+
+
+def _seconds(ms: float) -> str:
+    return f"{ms / 1000:.2f}".rstrip("0").rstrip(".") + " s"
+
+
+# ---------------------------------------------------------------- references
+
+class _Refs(BaseModel):
+    indices: list[int] = Field(default_factory=list)   # 1-based clip numbers
+    everything: bool = False
+    named: str | None = None                           # "intro", "ending", "clip 3", ...
+    problems: list[str] = Field(default_factory=list)
+
+
+def _resolve(text: str, clips: list[EditorClip], tl: EditorTimeline) -> _Refs:
+    refs = _Refs()
+    n = len(clips)
+
+    def add(index: int, label: str) -> None:
+        if 1 <= index <= n:
+            if index not in refs.indices:
+                refs.indices.append(index)
+            refs.named = refs.named or label
+        else:
+            refs.problems.append(f"There is no clip {index}; the timeline has {n} clips.")
+
+    for m in re.finditer(rf"\b{CLIP_WORDS}\s*#?\s*(\d+)\s*(?:-|to|through|till|se)\s*#?\s*(\d+)\b", text):
+        a, b = int(m.group(1)), int(m.group(2))
+        for i in range(min(a, b), max(a, b) + 1):
+            add(i, f"clips {min(a, b)}-{max(a, b)}")
+    for m in re.finditer(rf"\b{CLIP_WORDS}\s*(?:number\s*|no\.?\s*|#\s*)?(\d+)((?:\s*(?:,|and|&|aur)\s*#?\s*\d+)*)", text):
+        add(int(m.group(1)), f"clip {m.group(1)}")
+        for extra in re.findall(r"\d+", m.group(2) or ""):
+            add(int(extra), f"clip {extra}")
+    for m in re.finditer(rf"\b(\d+)(?:st|nd|rd|th)\s+{CLIP_WORDS}\b", text):
+        add(int(m.group(1)), f"clip {m.group(1)}")
+    for word, index in ORDINALS.items():
+        for m in re.finditer(rf"\b{word}\s+(?:and\s+(\w+)\s+)?{CLIP_WORDS}\b", text):
+            if re.search(rf"\b{word}\s+(?:to\s+)?last\b", text):
+                continue
+            add(index, f"clip {index}")
+            if m.group(1) and m.group(1) in ORDINALS:
+                add(ORDINALS[m.group(1)], f"clip {ORDINALS[m.group(1)]}")
+    if re.search(rf"\b(?:second|2nd)\s+(?:to\s+)?last\b", text):
+        add(n - 1, "the second-last clip")
+    elif re.search(rf"\b(?:last|final|aakhri|akhri)\s+{CLIP_WORDS}\b", text):
+        add(n, "the last clip")
+    if re.search(r"\b(?:intro|opening|beginning|shuruat|start of the video)\b", text) and not refs.indices:
+        add(1, "the intro (clip 1)")
+    if re.search(r"\b(?:ending|outro|end of the video|the end|last part)\b", text) and not refs.indices:
+        add(n, f"the ending (clip {n})")
+    for m in re.finditer(r"\bat\s+(\d{1,2}):([0-5]\d)\b|\bat\s+(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?)\b", text):
+        seconds = int(m.group(1)) * 60 + int(m.group(2)) if m.group(1) else float(m.group(3))
+        tick = _ticks(tl, seconds * 1000)
+        hit = [i for i, c in enumerate(clips, 1) if c.start_tick <= tick < c.start_tick + c.duration_ticks]
+        if hit:
+            add(hit[0], f"the clip at {seconds:g} s (clip {hit[0]})")
+        else:
+            refs.problems.append(f"No clip plays at {seconds:g} s.")
+    if re.search(r"\b(?:all clips|every clip|each clip|everything|whole video|entire video|all of it|sab|saare|sabhi)\b", text):
+        refs.everything = True
+    return refs
+
+
+def _amount_ms(text: str) -> int | None:
+    m = re.search(r"\bby\s+(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|seconds?|m|min|mins|minutes?)\b", text) or \
+        re.search(r"\b(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|seconds?)\s+(?:shorter|less|kam|chhota|chota)\b", text) or \
+        re.search(r"\b(?:remove|cut|trim|drop|lose)\s+(?:the\s+)?(?:first|last)?\s*(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|seconds?)\b", text)
+    if not m:
+        return None
+    value, unit = float(m.group(1)), m.group(2)
+    return int(round(value if unit == "ms" else value * 60000 if unit.startswith("m") and unit != "ms" else value * 1000))
+
+
+def _target_length_ms(text: str) -> int | None:
+    m = re.search(r"\bto\s+(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?)\b", text) or \
+        re.search(r"\b(?:make|cut|trim|shorten|keep)\s+(?:it|this|the video|the edit|the whole video|everything|video)\s+"
+                  r"(?:only\s+)?(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?)\b", text) or \
+        re.search(r"\b(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?)\s+(?:long|ka|ki|total)\b", text) or \
+        re.search(r"\bto\s+(\d{1,2}):([0-5]\d)\b", text)
+    if not m:
+        return None
+    if m.group(2) and m.group(2).isdigit():
+        return (int(m.group(1)) * 60 + int(m.group(2))) * 1000
+    value, unit = float(m.group(1)), m.group(2)
+    return int(round(value * 60000 if unit.startswith("m") else value * 1000))
+
+
+_TITLE_RE = re.compile(r"(?:\"([^\"]{1,200})\"|'([^']{1,200})')")
+
+
+# ---------------------------------------------------------------- the parser
+
+def parse_revision(text: str, timeline: EditorTimeline) -> RevisionResult:
+    raw = _normalise(text or "")
+    clips = video_clips(timeline)
+    if not raw:
+        return RevisionResult(intent="unknown", questions=["Type a change, e.g. 'remove clip 3' or 'add fades'."])
+    quoted = _TITLE_RE.search(raw)
+    title_text = next((g for g in quoted.groups() if g), None) if quoted else None
+    lower = raw.lower()
+    if quoted:                                        # quoted words are content, not instructions
+        lower = lower[:quoted.start()] + " " * (quoted.end() - quoted.start()) + lower[quoted.end():]
+    lower = re.sub(r"\b(?:half a second|half second|half a sec|aadha second|aadha sekend)\b", "0.5 second", lower)
+    t = _words_to_numbers(lower)
+    refs = _resolve(t, clips, timeline)
+    ids = [clips[i - 1].clip_id for i in refs.indices]
+    scope_all = refs.everything or not ids
+    scope_text = (f"all {len(clips)} clips" if scope_all else
+                  refs.named if len(ids) == 1 else f"clips {', '.join(str(i) for i in refs.indices)}")
+
+    def result(intent: Intent, ops: list[Operation] | None = None, summary: list[str] | None = None,
+               **kw) -> RevisionResult:
+        return RevisionResult(intent=intent, operations=ops or [], summary=summary or [],
+                              questions=list(refs.problems) + kw.pop("questions", []), **kw)
+
+    if refs.problems and not ids and not refs.everything:
+        return result("unknown")
+
+    # 1. undo / redo
+    if re.fullmatch(r"\s*(?:undo|undo that|undo it|go back|revert|wapas|pehle jaisa(?: karo)?)\s*[.!]?\s*", t):
+        return result("undo", summary=["Undo the last change."])
+    if re.fullmatch(r"\s*(?:redo|redo that|redo it)\s*[.!]?\s*", t):
+        return result("redo", summary=["Redo the change."])
+
+    # 2. questions about a clip
+    if re.search(r"\b(?:why|kyun|kyon)\b", t):
+        if not ids:
+            return result("explain", questions=["Which clip? e.g. 'why clip 3?'"])
+        clip = clips[refs.indices[0] - 1]
+        asset = next((a for a in timeline.assets if a.asset_id == clip.asset_id), None)
+        name = (asset.uri or asset.asset_id).rsplit("/", 1)[-1] if asset else clip.asset_id
+        if clip.rationale:
+            parts = ", ".join(f"{k.replace('_', ' ')} {v:.2f}" for k, v in sorted(clip.rationale.items()))
+            answer = (f"Clip {refs.indices[0]} ({name}, from {_seconds(clip.source_in_ms or 0)}) was picked by the "
+                      f"auto-edit with score {clip.score or 0:.2f}: {parts}.")
+        else:
+            answer = f"Clip {refs.indices[0]} ({name}) was placed by hand, so there is no auto-edit reason."
+        return result("explain", answer=answer)
+
+    # 3. speed changes are not renderable yet
+    if re.search(r"\b(?:slow[\s-]?mo(?:tion)?|slowmo|speed up|speed it up|fast[\s-]?forward|reverse|\d(?:\.\d)?x speed|\d(?:\.\d)?x)\b", t) and ids:
+        return result("unsupported", questions=["Speed changes (slow motion, 2x) are not supported by the renderer yet."])
+
+    # 4. overall pace -> new auto-edit with another mood
+    pace = re.search(r"\b(?:faster|quicker|more cuts|more energy|more energetic|snappier|tez|slower|calmer|fewer cuts|"
+                     r"less cuts|more relaxed|dheere|less energy)\b", t)
+    if pace and not ids and not re.search(r"\b(?:fade|fades|transition|transitions)\b", t):
+        mood = "energetic" if re.search(r"faster|quicker|more cuts|energy|energetic|snappier|tez", pace.group(0)) \
+            and not re.search(r"less energy", pace.group(0)) else "calm"
+        return result("retime", mood=mood, summary=[f"Re-run the auto-edit as {mood}: the cutter decides the cut "
+                                                    f"rhythm, so pace changes need a new auto-edit (you can undo it)."])
+
+    # 5. title
+    if re.search(r"\b(?:title|heading|caption|text|naam)\b", t):
+        if re.search(r"\b(?:remove|delete|drop|no|hatao|hata do|without)\b", t) and not title_text:
+            if not any(c.clip_id == TITLE_CLIP_ID for c in timeline.clips):
+                return result("title", questions=["There is no auto title to remove."])
+            return result("title", [Operation(op="remove_title")], ["Remove the title."])
+        if not title_text:
+            return result("title", questions=["Put the title in quotes, e.g. title 'Goa 2026'."])
+        if len(title_text) > MAX_TITLE_CHARS:
+            return result("title", questions=[f"Titles can be at most {MAX_TITLE_CHARS} characters."])
+        at = "end" if re.search(r"\b(?:at the end|end|ending|outro|last|aakhir)\b", t) else "start"
+        return result("title", [Operation(op="set_title", text=title_text, at=at)],
+                      [f'Title "{title_text}" for {_seconds(min(TITLE_MS, _ms(timeline, timeline.duration_ticks)))} '
+                       f"at the {at}."])
+
+    # 6. transitions
+    if re.search(r"\b(?:fade|fades|faded|crossfade|crossfades|dissolve|transition|transitions|cuts only|hard cuts|"
+                 r"just cuts|only cuts|smoother|smooth|softer)\b", t):
+        remove = bool(re.search(r"\b(?:remove|delete|no|without|drop|hard cuts|just cuts|only cuts|cuts only|"
+                                r"hatao|hata do|get rid of)\b", t))
+        if ids:
+            ops = [Operation(op="set_transition", clip_ids=[cid], transition=None if remove else "fade")
+                   for cid in ids if cid != clips[0].clip_id]
+            if not ops:
+                return result("transition", questions=["Clip 1 has no clip before it to fade from."])
+            numbers = [str(i) for i in refs.indices if i != 1]
+            verb = "Remove the fade into" if remove else "Fade into"
+            return result("transition", ops, [f"{verb} clip{'s' if len(numbers) > 1 else ''} {', '.join(numbers)}."])
+        policy = "cuts_only" if remove else "soft"
+        text_ = "Use hard cuts everywhere." if remove else "Soft fades between all clips (where the clips are long enough)."
+        return result("transition", [Operation(op="set_transitions", policy=policy)], [text_])
+
+    # 7. remove clips
+    if re.search(r"\b(?:remove|delete|drop|cut out|get rid of|hatao|hata do|nikalo|nikal do)\b", t) and ids \
+            and not re.search(r"\b(?:blur|effect|effects|zoom|title)\b", t) and _amount_ms(t) is None:
+        if len(ids) >= len(clips):
+            return result("remove", questions=["That would remove every clip."])
+        numbers = ", ".join(str(i) for i in refs.indices)
+        return result("remove", [Operation(op="remove_clips", clip_ids=ids)],
+                      [f"Remove clip{'s' if len(ids) > 1 else ''} {numbers}; later clips move earlier "
+                       f"and the video gets shorter."])
+
+    # 8. overall length
+    target = _target_length_ms(t)
+    if target is not None and re.search(r"\b(?:video|it|total|whole|overall|edit|shorten|shorter|make|cut|trim)\b", t) and not ids:
+        current = _ms(timeline, timeline.duration_ticks)
+        if target >= current:
+            return result("length", questions=[f"The video is already {_seconds(current)}; "
+                                               f"making it longer needs a new auto-edit."])
+        return result("length", [Operation(op="set_length", ms=target)],
+                      [f"Shorten the video from {_seconds(current)} to {_seconds(target)} by trimming the end."])
+
+    # 9. trim a clip
+    if re.search(r"\b(?:shorten|shorter|trim|cut|reduce|chhota|chota|kam|longer|extend|lengthen|lamba)\b", t):
+        if re.search(r"\b(?:longer|extend|lengthen|lamba|bada)\b", t):
+            return result("trim", questions=["Making clips longer is not supported yet; try a new auto-edit."])
+        amount = _amount_ms(t)
+        if not ids:
+            return result("trim", questions=["Which clip? e.g. 'shorten the intro by 1 second' or 'trim clip 3'."])
+        if amount is None:
+            amount = 1000
+            note = " (no amount given: 1 s)"
+        else:
+            note = ""
+        side: Literal["start", "end"] = "start" if re.search(
+            r"\b(?:intro|opening|beginning|start|shuruat|first \d+(?:\.\d+)?\s*(?:ms|s|sec|secs|seconds?))\b", t) else "end"
+        ops = [Operation(op="trim_clip", clip_ids=[cid], side=side, ms=amount) for cid in ids]
+        return result("trim", ops, [f"Shorten {scope_text} by {_seconds(amount)} at its {side}{note}; "
+                                    f"later clips move earlier."])
+
+    # 10. look
+    looks = [
+        (r"\b(?:black and white|black & white|b&w|b/w|monochrome|grayscale|greyscale)\b", "saturation", "set", 0.0, "black and white"),
+        (r"\b(?:brighter|lighter|more light|roshni|bright)\b", "brightness", "add", BRIGHTNESS_STEP, "brighter"),
+        (r"\b(?:darker|dimmer|less bright|dark)\b", "brightness", "add", -BRIGHTNESS_STEP, "darker"),
+        (r"\b(?:less contrast|flatter|softer contrast)\b", "contrast", "mul", 1 / CONTRAST_STEP, "with less contrast"),
+        (r"\b(?:more contrast|contrasty|punchier|higher contrast|contrast)\b", "contrast", "mul", CONTRAST_STEP, "with more contrast"),
+        (r"\b(?:less colou?rful|less saturated|muted|desaturated?|faded colou?rs?)\b", "saturation", "mul", 1 / SATURATION_STEP, "less colourful"),
+        (r"\b(?:more colou?rful|colou?rful|vibrant|more saturated|saturated|more colou?r|rangeen)\b", "saturation", "mul", SATURATION_STEP, "more colourful"),
+        (r"\b(?:remove (?:the )?blur|unblur|no blur|sharp(?:er|en)?)\b", "blur", "remove", 0.0, "sharp again (no blur)"),
+        (r"\b(?:blur|blurry|blurred)\b", "blur", "set", BLUR_RADIUS, "blurred"),
+    ]
+    if re.search(r"\b(?:remove|clear|reset|no)\s+(?:all\s+)?(?:the\s+)?(?:effects|filters|looks?|colou?r changes)\b", t):
+        target_ids = [c.clip_id for c in clips] if scope_all else ids
+        return result("look", [Operation(op="clear_look", clip_ids=target_ids)], [f"Remove look effects from {scope_text}."])
+    for pattern, effect, mode, amount, label in looks:
+        if re.search(pattern, t):
+            target_ids = [c.clip_id for c in clips] if scope_all else ids
+            op = Operation(op="clear_look" if mode == "remove" else "adjust_look", clip_ids=target_ids,
+                           effect_id=effect, amount=amount, text=mode)
+            return result("look", [op], [f"Look: {label} on {scope_text}."])
+
+    # 11. motion
+    motion = re.search(r"\b(zoom in|zoom out|zoom|pan left|pan right|pan up|pan down)\b", t)
+    if motion:
+        if not ids:
+            return result("motion", questions=["Which clip? e.g. 'zoom in on clip 2'."])
+        effect = {"zoom": "zoom_in"}.get(motion.group(1), motion.group(1).replace(" ", "_"))
+        return result("motion", [Operation(op="add_motion", clip_ids=ids, effect_id=effect)],
+                      [f"Add a slow {motion.group(1).replace('zoom', 'zoom').replace('_', ' ')} to {scope_text}."])
+
+    return result("unknown", questions=[
+        "I don't understand that yet. Try: 'remove clip 3', 'shorten the intro by 1 second', "
+        "'add fades', 'no transitions', 'make clip 2 brighter', 'black and white', 'zoom in on clip 4', "
+        "\"title 'Goa 2026' at the end\", 'make it 20 seconds', 'faster', 'why clip 3?', 'undo'."])
+
+
+# ---------------------------------------------------------------- applying operations
+
+def _beat_interval_ms(tl: EditorTimeline) -> float | None:
+    beats = sorted(m.position_tick for m in tl.markers if m.kind == "beat")
+    gaps = [b - a for a, b in zip(beats, beats[1:]) if b > a]
+    return _ms(tl, statistics.median(gaps)) if len(gaps) >= 2 else None
+
+
+def _snap_to_beats(tl: EditorTimeline, ms: float) -> tuple[float, int | None]:
+    """Round a removal to whole beats so later cuts stay on the beat (when beats exist)."""
+    interval = _beat_interval_ms(tl)
+    if not interval:
+        return ms, None
+    beats = max(1, round(ms / interval))
+    return beats * interval, beats
+
+
+def _quantise(tl: EditorTimeline, ms: float) -> float:
+    frame = _frame_ms(tl)
+    return max(frame, round(ms / frame) * frame)
+
+
+def _ripple(tl: EditorTimeline, clips: list[EditorClip], after_tick: int, delta: int) -> list[EditorClip]:
+    """Move every non-music clip that starts at/after ``after_tick`` earlier by ``delta`` ticks."""
+    out = []
+    for c in clips:
+        if c.track_id != "music" and c.start_tick >= after_tick:
+            c = c.model_copy(update={"start_tick": max(0, c.start_tick - delta)})
+        out.append(c)
+    return out
+
+
+def _fit_music_and_length(tl: EditorTimeline, clips: list[EditorClip]) -> EditorTimeline:
+    visual_end = max((c.start_tick + c.duration_ticks for c in clips if c.track_id != "music"), default=0)
+    fitted = []
+    for c in clips:
+        if c.track_id == "music" and c.start_tick + c.duration_ticks > visual_end:
+            new_dur = max(1, visual_end - c.start_tick)
+            update = {"duration_ticks": new_dur}
+            if c.source_in_ms is not None:
+                update["source_out_ms"] = c.source_in_ms + int(round(_ms(tl, new_dur)))
+            c = c.model_copy(update=update)
+        elif c.track_id == "overlay" and c.start_tick + c.duration_ticks > visual_end:
+            if c.start_tick >= visual_end:
+                continue
+            c = c.model_copy(update={"duration_ticks": visual_end - c.start_tick})
+        fitted.append(c)
+    markers = [m for m in tl.markers if m.position_tick < visual_end]
+    return tl.model_copy(update={"clips": fitted, "duration_ticks": max(1, visual_end), "markers": markers})
+
+
+def _drop_invalid_transitions(tl: EditorTimeline) -> tuple[EditorTimeline, int]:
+    """After a trim or removal a fade can become too long or lose its neighbour: drop it."""
+    clips = list(tl.clips)
+    video = sorted((c for c in clips if c.track_id == "video"), key=lambda c: c.start_tick)
+    dropped = 0
+    by_id = {c.clip_id: c for c in clips}
+    for i, c in enumerate(video):
+        if c.transition is None:
+            continue
+        prev = video[i - 1] if i else None
+        ok = (prev is not None and prev.start_tick + prev.duration_ticks == c.start_tick and
+              c.transition.duration_ticks <= 0.5 * min(prev.duration_ticks, c.duration_ticks))
+        if not ok:
+            by_id[c.clip_id] = c.model_copy(update={"transition": None})
+            dropped += 1
+    return tl.model_copy(update={"clips": [by_id[c.clip_id] for c in clips]}), dropped
+
+
+def _remove_range(tl: EditorTimeline, clip: EditorClip, side: str, ms: float) -> EditorTimeline:
+    delta = _ticks(tl, ms)
+    clips = []
+    for c in tl.clips:
+        if c.clip_id == clip.clip_id:
+            update: dict = {"duration_ticks": c.duration_ticks - delta}
+            if side == "start" and c.source_in_ms is not None:
+                update["source_in_ms"] = c.source_in_ms + int(round(ms))
+            if side == "end" and c.source_out_ms is not None:
+                update["source_out_ms"] = c.source_out_ms - int(round(ms))
+            c = c.model_copy(update=update)
+        clips.append(c)
+    clips = _ripple(tl, clips, clip.start_tick + clip.duration_ticks, delta)
+    return _fit_music_and_length(tl, clips)
+
+
+def apply_operations(timeline: EditorTimeline, operations: list[Operation]) -> tuple[EditorTimeline, list[str]]:
+    """Apply operations to a copy of ``timeline``. Returns (new timeline, extra notes).
+
+    Raises ValueError for an operation that cannot be applied (e.g. a clip would become
+    shorter than 200 ms); the input is never changed.
+    """
+    tl = timeline.model_copy(deep=True)
+    notes: list[str] = []
+    for op in operations:
+        clips = video_clips(tl)
+        by_id = {c.clip_id: c for c in tl.clips}
+        if op.op == "remove_clips":
+            for cid in sorted(op.clip_ids, key=lambda i: -by_id[i].start_tick):   # last first
+                clip = {c.clip_id: c for c in tl.clips}[cid]
+                rest = [c for c in tl.clips if c.clip_id != cid]
+                rest = _ripple(tl, rest, clip.start_tick + clip.duration_ticks, clip.duration_ticks)
+                tl = _fit_music_and_length(tl, rest)
+            if tl.markers:
+                notes.append("Removed whole clips, so later cuts stay on the beat.")
+        elif op.op == "trim_clip":
+            for cid in op.clip_ids:
+                clip = {c.clip_id: c for c in tl.clips}[cid]
+                ms, beats = _snap_to_beats(tl, float(op.ms or 0))
+                ms = _quantise(tl, ms)
+                if _ms(tl, clip.duration_ticks) - ms < MIN_CLIP_MS:
+                    raise ValueError(f"clip {clips.index(clip) + 1} is only {_seconds(_ms(tl, clip.duration_ticks))} "
+                                     f"long; it cannot lose {_seconds(ms)}")
+                tl = _remove_range(tl, clip, op.side or "end", ms)
+                if beats:
+                    notes.append(f"Trimmed {_seconds(ms)} ({beats} beat{'s' if beats > 1 else ''}) so later cuts "
+                                 f"stay on the beat.")
+        elif op.op == "set_length":
+            target = _ticks(tl, op.ms or 0)
+            while tl.duration_ticks > target:
+                clips = video_clips(tl)
+                last = clips[-1]
+                excess = tl.duration_ticks - target
+                if len(clips) > 1 and last.duration_ticks - excess < _ticks(tl, MIN_CLIP_MS):
+                    rest = [c for c in tl.clips if c.clip_id != last.clip_id]
+                    tl = _fit_music_and_length(tl, rest)
+                else:
+                    if last.duration_ticks - excess < _ticks(tl, MIN_CLIP_MS):
+                        raise ValueError("the video cannot be that short")
+                    tl = _remove_range(tl, last, "end", _ms(tl, excess))
+        elif op.op == "set_transitions":
+            tl = apply_style(tl, transition_policy=op.policy or "soft")
+        elif op.op == "set_transition":
+            for cid in op.clip_ids:
+                index = [c.clip_id for c in clips].index(cid)
+                prev, clip = clips[index - 1], clips[index]
+                if op.transition is None:
+                    new = clip.model_copy(update={"transition": None})
+                else:
+                    tmp = apply_style(tl.model_copy(update={"clips": [prev, clip.model_copy(update={"transition": None})]}),
+                                      transition_policy="soft")
+                    fade = {c.clip_id: c for c in tmp.clips}[cid].transition
+                    if fade is None:
+                        raise ValueError(f"clip {index + 1} or the clip before it is too short (or has no spare "
+                                         f"footage) for a fade")
+                    new = clip.model_copy(update={"transition": fade})
+                tl = tl.model_copy(update={"clips": [new if c.clip_id == cid else c for c in tl.clips]})
+        elif op.op in ("adjust_look", "clear_look"):
+            updated = []
+            for c in tl.clips:
+                if c.clip_id in op.clip_ids:
+                    c = c.model_copy(update={"effects": _look(c.effects, op)})
+                updated.append(c)
+            tl = tl.model_copy(update={"clips": updated})
+        elif op.op == "add_motion":
+            updated = []
+            for c in tl.clips:
+                if c.clip_id in op.clip_ids:
+                    dur = int(_ms(tl, c.duration_ticks))
+                    params = ({"from_scale": 1.0, "to_scale": ZOOM_SCALE, "duration_ms": dur} if op.effect_id == "zoom_in" else
+                              {"from_scale": ZOOM_SCALE, "to_scale": 1.0, "duration_ms": dur} if op.effect_id == "zoom_out" else
+                              {"distance": 0.1, "duration_ms": dur})
+                    effects = [e for e in c.effects if e.effect_id not in ("zoom_in", "zoom_out", "pan_left", "pan_right",
+                                                                         "pan_up", "pan_down")]
+                    effects.append(EffectRef(effect_id=op.effect_id, parameters=params))
+                    c = c.model_copy(update={"effects": effects})
+                updated.append(c)
+            tl = tl.model_copy(update={"clips": updated})
+        elif op.op == "set_title":
+            start = 0 if op.at == "start" else max(0, tl.duration_ticks - _ticks(tl, TITLE_MS))
+            assets = [a for a in tl.assets if a.asset_id != TITLE_ASSET_ID]
+            assets.append(MediaAsset(asset_id=TITLE_ASSET_ID, kind="text", text=op.text))
+            rest = [c for c in tl.clips if c.clip_id != TITLE_CLIP_ID]
+            overlay_busy = [c for c in rest if c.track_id == "overlay" and c.start_tick < start + _ticks(tl, TITLE_MS)
+                            and c.start_tick + c.duration_ticks > start]
+            if overlay_busy:
+                raise ValueError("the overlay track already has something there")
+            rest.append(EditorClip(clip_id=TITLE_CLIP_ID, asset_id=TITLE_ASSET_ID, track_id="overlay",
+                                   start_tick=start, duration_ticks=min(_ticks(tl, TITLE_MS), tl.duration_ticks)))
+            tl = tl.model_copy(update={"assets": assets, "clips": rest})
+        elif op.op == "remove_title":
+            tl = tl.model_copy(update={"assets": [a for a in tl.assets if a.asset_id != TITLE_ASSET_ID],
+                                       "clips": [c for c in tl.clips if c.clip_id != TITLE_CLIP_ID]})
+    tl, dropped = _drop_invalid_transitions(tl)
+    if dropped:
+        notes.append(f"Dropped {dropped} fade{'s' if dropped > 1 else ''} that no longer fit.")
+    return tl, notes
+
+
+_LOOK_PARAM = {"brightness": "amount", "contrast": "factor", "saturation": "factor", "blur": "radius"}
+_LOOK_LIMITS = {"brightness": (-1.0, 1.0), "contrast": (0.0, 3.0), "saturation": (0.0, 3.0), "blur": (0.0, 50.0)}
+_NEUTRAL = {"brightness": 0.0, "contrast": 1.0, "saturation": 1.0, "blur": 0.0}
+
+
+def _look(effects: list[EffectRef], op: Operation) -> list[EffectRef]:
+    if op.op == "clear_look":
+        drop = {op.effect_id} if op.effect_id else set(_LOOK_PARAM)
+        return [e for e in effects if e.effect_id not in drop]
+    effect = op.effect_id or ""
+    param = _LOOK_PARAM[effect]
+    current = next((e for e in effects if e.effect_id == effect), None)
+    value = getattr(current.parameters, param) if current is not None else _NEUTRAL[effect]
+    if op.text == "add":
+        value = value + (op.amount or 0)
+    elif op.text == "mul":
+        value = value * (op.amount or 1)
+    else:
+        value = op.amount or 0.0
+    low, high = _LOOK_LIMITS[effect]
+    value = round(min(high, max(low, value)), 4)
+    rest = [e for e in effects if e.effect_id != effect]
+    if abs(value - _NEUTRAL[effect]) < 1e-9 and effect != "saturation":
+        return rest
+    return rest + [EffectRef(effect_id=effect, parameters={param: value})]

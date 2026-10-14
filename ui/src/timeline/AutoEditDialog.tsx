@@ -18,14 +18,15 @@ type Props = {
   onReadBrief: (text: string) => Promise<BriefResponse>;
   onProfile: (profile: string) => void;
   onCancel: () => void;
+  initialMood?: 'energetic' | 'calm';
   onClose: () => void;
 };
 
-export function AutoEditDialog({ assets, hasClips, active, progress, message, error, onStart, onReadBrief, onProfile, onCancel, onClose }: Props) {
+export function AutoEditDialog({ assets, hasClips, active, progress, message, error, onStart, onReadBrief, onProfile, onCancel, onClose, initialMood }: Props) {
   const musicAssets = useMemo(() => assets.filter(asset => asset.kind === 'audio' || asset.kind === 'music'), [assets]);
   const videos = useMemo(() => assets.filter(asset => asset.kind === 'video'), [assets]);
   const [musicAssetId, setMusicAssetId] = useState('');
-  const [mood, setMood] = useState<'energetic' | 'calm'>('energetic');
+  const [mood, setMood] = useState<'energetic' | 'calm'>(initialMood ?? 'energetic');
   const [durationS, setDurationS] = useState(30);
   const [confirmReplace, setConfirmReplace] = useState(false);
   const [selectedVideos, setSelectedVideos] = useState<Set<string>>(() => new Set(videos.map(video => video.asset_id)));

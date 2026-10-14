@@ -16,6 +16,8 @@ import { TimelineEditor } from './timeline/TimelineEditor';
 import { addTextClip, deleteClip, splitAt, Timeline, TimelineClip } from './timeline/ops';
 import { AutoEditDialog, AutoEditRequest } from './timeline/AutoEditDialog';
 import { BriefResponse } from './timeline/brief';
+import { ReviseBar } from './timeline/ReviseBar';
+import { RevisionResponse } from './timeline/revise';
 import { canRedo, canUndo, createHistory, History, push, redo, undo } from './timeline/history';
 import { commandForKey } from './timeline/keys';
 import { formatTimecode, nextEditPoint, playbackSource, stepFrames } from './timeline/navigation';
@@ -47,6 +49,7 @@ function App() {
   const [readiness, setReadiness] = useState<{ ok: boolean; error: string | null } | null>(null);
   const [checking, setChecking] = useState(false);
   const [showAutoEdit, setShowAutoEdit] = useState(false);
+  const [autoEditMood, setAutoEditMood] = useState<'energetic' | 'calm' | undefined>(undefined);
   const [autoEditError, setAutoEditError] = useState<string | null>(null);
   const [history, setHistory] = useState<History<Timeline> | null>(null);
   const [saveCycle, setSaveCycle] = useState(0);
@@ -299,6 +302,10 @@ function App() {
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
   }, [timeline, playhead, playing, selectedClipId, project, revision]);
+  const askRevision = async (text: string, current: Timeline): Promise<RevisionResponse> => {
+    if (!project) throw new Error('No project open');
+    return api<RevisionResponse>(`/api/projects/${project.project_id}/revise`, json('POST', { text, timeline: current }));
+  };
   const readBrief = async (text: string): Promise<BriefResponse> => {
     if (!project) throw new Error('No project open');
     return api<BriefResponse>(`/api/projects/${project.project_id}/brief`, json('POST', { text }));
@@ -352,11 +359,14 @@ function App() {
             </button>)}</div>
             {!assets.length && <div className="drop-hint"><span>＋</span><strong>Your media will appear here</strong><small>Add videos, photos, and music to get started.</small><button className="quiet" onClick={() => void addMedia()}>Browse files</button></div>}
           </div>
-          <div className="timeline-toolbar"><div><button className="quiet" onClick={() => setShowAutoEdit(true)} disabled={saveMessage !== 'Saved' || !!job && ['queued', 'running'].includes(job.status)}>Auto-edit…</button>
+          <div className="timeline-toolbar"><div><button className="quiet" onClick={() => { setAutoEditMood(undefined); setShowAutoEdit(true); }} disabled={saveMessage !== 'Saved' || !!job && ['queued', 'running'].includes(job.status)}>Auto-edit…</button>
             <button className="quiet" onClick={undoEdit} disabled={!history || !canUndo(history)} title="Undo (Ctrl+Z)">Undo</button>
             <button className="quiet" onClick={redoEdit} disabled={!history || !canRedo(history)} title="Redo (Ctrl+Shift+Z / Ctrl+Y)">Redo</button></div>
             {autoEditError && <span className="error-text" role="alert">{autoEditError}</span>}
           </div>
+          <ReviseBar timeline={timeline} disabled={!!job && ['queued', 'running'].includes(job.status)}
+            onAsk={askRevision} onApply={next => updateTimeline(next)} onUndo={undoEdit} onRedo={redoEdit}
+            onAutoEdit={mood => { setAutoEditMood(mood); setShowAutoEdit(true); }}/>
           <TimelineEditor timeline={timeline} assets={assets} projectId={project.project_id} selectedId={selectedClipId} onSelect={setSelectedClipId} playhead={playhead} onPlayhead={seekTo} onChange={updateTimeline} issues={issues} error={timelineError} onError={setTimelineError} playing={playing} onTogglePlay={togglePlayback} timecode={formatTimecode(timeline, playhead)} onShortcuts={() => setShowShortcuts(true)} onRegisterZoomActions={registerZoomActions}/>
           <div className="editor-workbench">
             <section className="panel preview-panel"><div className="section-head"><div><h2>Preview</h2><span>{previewRender ? 'Quick preview render' : 'Rough preview — transitions, effects and titles show in Quick preview render'}</span></div><span className="panel-dot"/></div>
@@ -397,7 +407,7 @@ function App() {
       active={!!job && ['queued', 'running'].includes(job.status) && autoEditJob.current}
       progress={job?.progress ?? 0} message={job?.message ?? 'Queued'} error={autoEditError}
       onStart={request => void startAutoEdit(request)}
-      onReadBrief={readBrief} onProfile={setProfile}
+      onReadBrief={readBrief} onProfile={setProfile} initialMood={autoEditMood}
       onCancel={() => { if (job) void api(`/api/jobs/${job.job_id}/cancel`, json('POST', {})); }}
       onClose={() => { setShowAutoEdit(false); setAutoEditError(null); }}/ >}
     {showShortcuts && <div className="modal-backdrop" role="presentation" onClick={() => setShowShortcuts(false)}><section className="panel shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" onClick={event => event.stopPropagation()}>

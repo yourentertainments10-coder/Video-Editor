@@ -1,7 +1,7 @@
 # Local Director: Offline Brief and Revision Engine
 
-Version 1.1, 2026-10-14. Status: **briefs (Section 3) implemented as LD-1;
-revisions (Section 4) not yet.** Replaces the
+Version 1.2, 2026-10-14. Status: **briefs (Section 3) implemented as LD-1;
+revisions (Section 4) implemented as LD-2.** Replaces the
 cloud "Director" and "Reviser" model roles in `ARCHITECTURE.md` Sections 8,
 11 and 14, in line with `OFFLINE_POLICY.md`. Implementation belongs to P4 in
 `todo.md`.
@@ -33,6 +33,25 @@ clear "I don't understand X; try one of: …" instead of a guess.
   `transition_policy` and `title`.
 - Tests: `tests/director/brief_cases.json` (118 golden sentences) and
   `tests/director/test_*.py`.
+
+## Implementation status (LD-2)
+
+- `poc/director/revise.py`: `parse_revision(text, timeline)` -> intent + typed operations +
+  plain summary; `apply_operations` returns a NEW timeline (ripple edits, beat-snapped trims,
+  music and overlay fitted to the new length, fades that no longer fit are dropped).
+- Intents: remove, trim, length, transition (all / one boundary), look (brightness,
+  contrast, saturation, black and white, blur, clear), motion (zoom/pan), title (add,
+  change, remove), retime ("faster"/"calmer" -> offer a new auto-edit), explain ("why clip
+  3?" from the cutter's rationale), undo/redo. Speed changes are refused clearly (not
+  renderable yet).
+- References: clip numbers (shown as #1, #2 … on the timeline), ranges and lists,
+  ordinals (also Hinglish), last / second-to-last, intro / ending, "the clip at 0:12",
+  everything. Out-of-range or empty references become questions.
+- `POST /api/projects/{pid}/revise {text, timeline}` returns a proposed timeline and
+  saves nothing; the UI shows the summary and applies it through the normal edit path
+  (autosave + undo).
+- Tests: `tests/director/revision_cases.json` (113 golden instructions), each applied
+  change validated, plus server and UI tests.
 
 ## 2. Components
 

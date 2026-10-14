@@ -155,3 +155,54 @@ def test_cuts_only_removes_transitions_and_title_is_not_duplicated():
 def test_unknown_policy_is_rejected():
     with pytest.raises(ValueError):
         apply_style(_tl([], [ASSET]), transition_policy="wipe")
+
+
+# ---------------- LD-2: /revise ----------------
+
+def _auto_edit(client, pid, assets, **extra):
+    rev = client.get(f"/api/projects/{pid}/timeline").json()["revision"]
+    job = _wait(client, client.post(f"/api/projects/{pid}/auto-edit", json={
+        "base_revision": rev, "music_asset_id": assets["synth_128.wav"]["asset_id"],
+        "mood": "calm", "duration_s": 8, **extra}).json()["job_id"])
+    assert job["status"] == "done", job
+    return client.get(f"/api/projects/{pid}/timeline").json()
+
+
+def test_revise_proposes_without_saving_then_renders_after_apply(client):
+    pid, assets = _project(client)
+    saved = _auto_edit(client, pid, assets)
+    clips_before = [c for c in saved["timeline"]["clips"] if c["track_id"] == "video"]
+    r = client.post(f"/api/projects/{pid}/revise", json={"text": "remove clip 2", "timeline": saved["timeline"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["intent"] == "remove" and body["summary"] and body["questions"] == []
+    proposed = body["timeline"]
+    assert len([c for c in proposed["clips"] if c["track_id"] == "video"]) == len(clips_before) - 1
+    assert client.get(f"/api/projects/{pid}/timeline").json()["revision"] == saved["revision"]   # nothing saved
+    # chain a second change on the proposal, then apply it like the UI does
+    body2 = client.post(f"/api/projects/{pid}/revise",
+                        json={"text": "make it black and white", "timeline": proposed}).json()
+    put = client.put(f"/api/projects/{pid}/timeline",
+                     json={"base_revision": saved["revision"], "timeline": body2["timeline"]})
+    assert put.status_code == 200, put.text
+    job = _wait(client, client.post(f"/api/projects/{pid}/render", json={"profile": "preview_540p"}).json()["job_id"])
+    assert job["status"] == "done", job
+    assert job["report"]["ok"] is True, job["report"]["problems"]
+
+
+def test_revise_answers_questions_and_refuses_impossible_changes(client):
+    pid, assets = _project(client)
+    tl = _auto_edit(client, pid, assets)["timeline"]
+    why = client.post(f"/api/projects/{pid}/revise", json={"text": "why clip 1?", "timeline": tl}).json()
+    assert why["intent"] == "explain" and "score" in why["answer"] and why["timeline"] is None
+    impossible = client.post(f"/api/projects/{pid}/revise",
+                             json={"text": "shorten clip 1 by 30 seconds", "timeline": tl}).json()
+    assert impossible["timeline"] is None and impossible["questions"]
+    undo = client.post(f"/api/projects/{pid}/revise", json={"text": "undo", "timeline": tl}).json()
+    assert undo["intent"] == "undo" and undo["timeline"] is None
+
+
+@pytest.mark.parametrize("bad", [{"text": "x", "timeline": {"nope": 1}}, {"timeline": {}}, {"text": 3, "timeline": {}}])
+def test_revise_validates(client, bad):
+    pid, _ = _project(client)
+    assert client.post(f"/api/projects/{pid}/revise", json=bad).status_code == 422

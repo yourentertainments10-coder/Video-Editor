@@ -21,6 +21,7 @@ from pydantic import ValidationError
 
 from poc.director import AssetRef, parse_brief, selected_video_ids
 from poc.director.apply import apply_style
+from poc.director.revise import apply_operations, parse_revision
 from poc.director.brief import MAX_TITLE_CHARS
 from poc.resources import ui_dist_dir
 from poc.decide import CutterError, GridError, cut
@@ -30,7 +31,7 @@ from poc.ingest.proxy import make_audio_preview, make_proxy, make_thumbnails
 from poc.perceive.footage import analyze_footage
 from poc.perceive.music import analyze_music
 from poc.project_assets import AssetImportError, ProjectAssetLibrary
-from poc.render.editor import EditorRenderer, RenderCancelled
+from poc.render.editor import EditorRenderError, EditorRenderer, RenderCancelled
 from poc.render.export import EXPORT_PROFILES, get_profile
 from poc.timeline import (
     EditorSettings, EditorTimeline, Layer, MediaAsset, TimeBase, Track,
@@ -367,6 +368,33 @@ def create_app(*, data_dir: Path, token: str, allowed_hosts: tuple[str, ...],
         result = parse_brief(text, refs)
         payload = result.model_dump()
         payload["video_asset_ids"] = selected_video_ids(result.brief, refs)
+        return payload
+
+    @app.post("/api/projects/{pid}/revise")
+    def revise(pid: str, body: dict[str, Any]):
+        """Local Director: turn a written change into a PROPOSED timeline. Saves nothing;
+        the UI applies it through the normal edit path (autosave + undo)."""
+        text = body.get("text")
+        if not isinstance(text, str) or len(text) > 500:
+            raise HTTPException(422, "text must be a string of at most 500 characters")
+        try:
+            current = EditorTimeline.model_validate(body.get("timeline"))
+        except ValidationError as exc:
+            raise HTTPException(422, f"invalid timeline: {exc.errors()[:1]}") from exc
+        result = parse_revision(text, current)
+        payload = result.model_dump(exclude={"operations"})
+        payload["operations"] = [op.model_dump(exclude_none=True) for op in result.operations]
+        payload["notes"], payload["timeline"] = [], None
+        if result.operations:
+            try:
+                proposed, notes = apply_operations(current, result.operations)
+                EditorRenderer().compile(proposed, _library(_project_root(data_dir, pid)))
+            except (ValueError, EditorRenderError) as exc:
+                payload["questions"].append(f"Can't do that: {exc}")
+                payload["operations"] = []
+                return payload
+            payload["notes"] = notes
+            payload["timeline"] = proposed.model_dump(mode="json")
         return payload
 
     @app.post("/api/projects/{pid}/auto-edit", status_code=202)
