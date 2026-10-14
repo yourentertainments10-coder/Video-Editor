@@ -59,11 +59,7 @@ def render_audio_track(
             "-ss", _seconds(start_ms / 1000), "-t", _seconds(clip_frames / fps),
             "-i", str(segment.path),
         ])
-        if not input_has_audio[index]:
-            cmd.extend([
-                "-f", "lavfi", "-t", _seconds(clip_frames / fps),
-                "-i", "anullsrc=r=48000:cl=stereo",
-            ])
+        # Silent audio will be generated in filter graph later
 
     # Track each source input index (silent clips have a separate lavfi input).
     source_audio_indices = []
@@ -107,7 +103,14 @@ def render_audio_track(
         if i < len(joins) and joins[i].kind == "cut" and cut_fade_ms:
             fade_start = max(0, clip_frames / fps - cut_fade_ms / 1000)
             filters.append(f"afade=t=out:st={_seconds(fade_start)}:d={_seconds(cut_fade_ms / 1000)}")
-        graph.append(f"[{source_audio_indices[i]}:a:0]{','.join(filters)}[{label}]")
+
+        # Generate audio: use actual audio if present, otherwise generate silence via anullsrc
+        if input_has_audio[i]:
+            graph.append(f"[{source_audio_indices[i]}:a:0]{','.join(filters)}[{label}]")
+        else:
+            # Generate silence for this segment using anullsrc
+            silence_src = f"anullsrc=r=48000:cl=stereo,atrim=duration={_seconds(clip_frames / fps)}"
+            graph.append(f"{silence_src},{','.join(filters)}[{label}]")
 
     current = "a0"
     for i, join in enumerate(joins):

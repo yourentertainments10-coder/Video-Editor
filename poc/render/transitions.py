@@ -141,7 +141,7 @@ def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int,
         next_label = f"v{index + 1}"
         out_label = f"seq{index}"
         if join.kind == "cut":
-            graph.append(f"[{current}][{next_label}]concat=n=2:v=1:a=0[{out_label}]")
+            graph.append(f"[{current}][{next_label}]concat=n=2:v=1:a=0,settb=1/{fps}[{out_label}]")
         elif join.kind == "fade_black":
             half = join_frames[index] // 2
             fade_start = _seconds((elapsed_frames - half) / fps)
@@ -152,7 +152,7 @@ def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int,
                 f"setpts=PTS-STARTPTS[fadeout{index}];"
                 f"[{next_label}]trim=start_frame={half},setpts=PTS-STARTPTS,"
                 f"fade=t=in:st=0:d={fade_duration}[fadein{index}];"
-                f"[fadeout{index}][fadein{index}]concat=n=2:v=1:a=0[{out_label}]"
+                f"[fadeout{index}][fadein{index}]concat=n=2:v=1:a=0,settb=1/{fps}[{out_label}]"
             )
         else:
             frames = join_frames[index]

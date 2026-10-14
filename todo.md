@@ -244,3 +244,8 @@ The project is ready for the **validated editing MVP** when P0 and P1 pass and t
 The project is ready as the **first usable AI video editor** when a user can import images/videos/music, create and manually edit a structured timeline, preview, request a constrained AI plan/revision, undo it, and export a correctly synchronized MP4 without any external API or network connection.
 
 The project is ready for **commercial or hosted release** only after the applicable license, privacy, security, storage, deployment, and support items in P8 are complete. Those release tasks are separate from proving the local editing product works.
+
+
+
+
+

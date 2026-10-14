@@ -2,6 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, Asset, assetAudioUrl, assetProxyUrl, EditorCatalogue, Job, json, Project, saveTimeline, thumbnailUrl } from './api';
 import { Inspector } from './timeline/Inspector';
+import { exportAdvice } from './exportAdvice';
+import { ExportProfile } from './exportAdvice';
+
+// Define export profiles matching the backend
+const EXPORT_PROFILES: Record<string, ExportProfile> = {
+  preview_540p: { name: 'preview_540p', width: 960, height: 540, fps: 30, crf: 28, preset: 'veryfast', audio_bitrate: '128k', target_lufs: -14.0, true_peak_db: -1.0 },
+  youtube_1080p: { name: 'youtube_1080p', width: 1920, height: 1080, fps: 30, crf: 18, preset: 'medium', audio_bitrate: '192k', target_lufs: -14.0, true_peak_db: -1.0 },
+  reels_9x16: { name: 'reels_9x16', width: 1080, height: 1920, fps: 30, crf: 20, preset: 'medium', audio_bitrate: '192k', target_lufs: -14.0, true_peak_db: -1.0 },
+  square_1x1: { name: 'square_1x1', width: 1080, height: 1080, fps: 30, crf: 20, preset: 'medium', audio_bitrate: '192k', target_lufs: -14.0, true_peak_db: -1.0 },
+};
 import { TimelineEditor } from './timeline/TimelineEditor';
 import { addTextClip, deleteClip, splitAt, Timeline, TimelineClip } from './timeline/ops';
 import { AutoEditDialog } from './timeline/AutoEditDialog';
@@ -368,6 +378,19 @@ function App() {
               {!readiness?.ok && readiness?.error && <p className="readiness-error">{readiness.error}</p>}
               <p className={`save-state ${saveMessage === 'Saved' ? 'saved' : ''}`}>{saveMessage}</p>
               <label htmlFor="profile">Export profile</label><select id="profile" value={profile} onChange={e => setProfile(e.target.value)}>{profiles.map(p => <option key={p} value={p}>{p.replaceAll('_', ' ')}</option>)}</select>
+
+              {/* Export advice */}
+              {exportAdvice(assets, EXPORT_PROFILES[profile]).map((advice, index) => (
+                <div key={index} className="export-advice">
+                  <strong>{advice.code === 'orientation' ? 'Orientation:' : 'Resolution:'}</strong> {advice.message}
+                  {advice.suggest && (
+                    <button className="quiet" onClick={() => setProfile(advice.suggest)}>
+                      Switch to {advice.suggest.replaceAll('_', ' ')}
+                    </button>
+                  )}
+                </div>
+              ))}
+
               {!job || ['done', 'failed', 'cancelled'].includes(job.status) ? <button className="primary render-button" onClick={() => void startRender(false)} disabled={!readiness?.ok || checking}>{readiness?.ok ? 'Render video' : 'Resolve timeline issues'}</button> : <>
                 <div className="job-line"><span>{job.message}</span><strong>{Math.round(job.progress * 100)}%</strong></div><div className="progress"><i style={{ width: `${job.progress * 100}%` }}/></div><button className="quiet cancel" onClick={() => void cancel()}>Cancel render</button>
               </>}

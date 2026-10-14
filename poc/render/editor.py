@@ -606,14 +606,189 @@ class EditorRenderer:
 
                 def video_job() -> Path:
                     began = time.perf_counter()
-                    path = render_sequence_to_file(
-                        actual_segments, joins, temp_dir / "video.mp4", width=plan.width,
-                        height=plan.height, fps=plan.fps, audio_path=None,
-                        crf=selected.crf, preset=selected.preset, input_seeking=True,
-                        final_filter=ass_filter, cwd=temp_dir, cancel=cancelled,
-                    )
+
+                    # Chunked video processing to limit memory usage
+                    # Split segments into chunks of at most 8 segments, splitting only at plain cuts
+                    max_inputs_per_encode = 8
+                    chunks = []  # List of (start_idx, end_idx) into resolved_segments
+                    current_chunk_start = 0
+
+                    for i in range(len(resolved_segments)):
+                        # Check if we should finalize this chunk
+                        should_split = False
+                        if i - current_chunk_start + 1 >= max_inputs_per_encode:
+                            # Only split at plain cuts (not inside transitions)
+                            if i == len(resolved_segments) - 1:
+                                # Last segment
+                                should_split = True
+                            else:
+                                # Check if the JOIN to next segment is a cut
+                                join_index = i  # join i is between segment i and i+1
+                                if join_index < len(actual_joins) and actual_joins[join_index].kind == "cut":
+                                    should_split = True
+                        elif i == len(resolved_segments) - 1:
+                            # Last segment always finalizes the chunk
+                            should_split = True
+
+                        if should_split:
+                            chunks.append((current_chunk_start, i + 1))
+                            current_chunk_start = i + 1
+
+                    # If only one chunk, use original path
+                    if len(chunks) == 1:
+                        path = render_sequence_to_file(
+                            actual_segments, joins, temp_dir / "video.mp4", width=plan.width,
+                            height=plan.height, fps=plan.fps, audio_path=None,
+                            crf=selected.crf, preset=selected.preset, input_seeking=True,
+                            final_filter=ass_filter, cwd=temp_dir, cancel=cancelled,
+                        )
+                        timings["video"] = float(time.perf_counter() - began)
+                        return path
+
+                    # Process each chunk
+                    chunk_videos = []
+
+                    # Determine parallelism
+                    max_parallel = max(1, min(3, os.cpu_count() // 4))
+
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                    def process_chunk(chunk_idx, chunk_start, chunk_end):
+                        if chunk_end <= chunk_start:
+                            return None
+
+                        # Build Segment and Join lists for this chunk
+                        chunk_segments = []
+                        chunk_joins = []
+                        for i in range(chunk_start, chunk_end):
+                            item, path = resolved_segments[i]
+                            left_frames = item.transition_frames
+                            base_ms = round(item.duration_frames * 1000 / plan.fps)
+                            source_in = (0 if item.kind == "gap" else
+                                         round(left_frames * 1000 / plan.fps) if item.kind == "image" else
+                                         int(item.source_in_ms or 0))
+                            chunk_segments.append(Segment(
+                                path=path, src_in_ms=source_in, src_out_ms=source_in + base_ms,
+                                vfilter=item.vfilter,
+                            ))
+
+                            # Add join to next segment (except for last segment in chunk)
+                            if i < chunk_end - 1:
+                                next_item, _ = resolved_segments[i + 1]
+                                # Find the join between these segments in the original list
+                                original_index = resolved_segments.index((item, path))
+                                if original_index < len(actual_joins):
+                                    chunk_joins.append(actual_joins[original_index])
+
+                        # Calculate chunk timing
+                        vs_segments = [item[0] for item in resolved_segments[chunk_start:chunk_end]]
+                        chunk_start_frames = sum(
+                            vs.duration_frames for vs in resolved_segments[0:chunk_start]
+                        )
+                        chunk_duration_frames = sum(
+                            vs.duration_frames for vs in vs_segments
+                        )
+
+                        # Create ASS filter for titles in this chunk
+                        chunk_ass_filter = None
+                        if plan.text_overlays:
+                            # Filter and shift text overlays for this chunk
+                            chunk_overlays = []
+                            for overlay in plan.text_overlays:
+                                overlay_start_frame = overlay.start_ms * plan.fps // 1000
+                                overlay_end_frame = overlay.end_ms * plan.fps // 1000
+                                chunk_start_frame_abs = chunk_start_frames
+                                chunk_end_frame_abs = chunk_start_frame_abs + chunk_duration_frames
+
+                                # Check if overlay intersects with this chunk
+                                if overlay_end_frame > chunk_start_frame_abs and overlay_start_frame < chunk_end_frame_abs:
+                                    # Calculate fade settings for chunk edges
+                                    fade_in_ms = overlay.fade_in_ms if overlay.fade_in_ms is not None else overlay.fade_ms
+                                    fade_out_ms = overlay.fade_out_ms if overlay.fade_out_ms is not None else overlay.fade_ms
+
+                                    # If overlay starts before chunk, no fade-in at chunk start
+                                    if overlay_start_frame <= chunk_start_frame_abs:
+                                        fade_in_ms = 0
+                                    # If overlay ends after chunk, no fade-out at chunk end
+                                    if overlay_end_frame >= chunk_end_frame_abs:
+                                        fade_out_ms = 0
+
+                                    # Create adjusted overlay for this chunk
+                                    adjusted_overlay = TextOverlay(
+                                        text=overlay.text,
+                                        start_ms=max(0, (overlay_start_frame - chunk_start_frame_abs) * 1000 // plan.fps),
+                                        end_ms=min(chunk_duration_frames * 1000 // plan.fps,
+                                                   (overlay_end_frame - chunk_start_frame_abs) * 1000 // plan.fps),
+                                        x=overlay.x,
+                                        y=overlay.y,
+                                        size_pct=overlay.size_pct,
+                                        color=overlay.color,
+                                        outline_px=overlay.outline_px,
+                                        bold=overlay.bold,
+                                        fade_in_ms=fade_in_ms,
+                                        fade_out_ms=fade_out_ms,
+                                        font=overlay.font
+                                    )
+                                    chunk_overlays.append(adjusted_overlay)
+
+                            if chunk_overlays:
+                                ass_path = temp_dir / f"overlays_{chunk_idx:04d}.ass"
+                                _write_ass(ass_path, chunk_overlays, plan.width, plan.height)
+                                chunk_ass_filter = _ass_filter(Path(ass_path.name))
+
+                        # Render the chunk
+                        chunk_path = temp_dir / f"chunk_{chunk_idx:04d}.mp4"
+                        render_sequence_to_file(
+                            chunk_segments, chunk_joins, chunk_path, width=plan.width,
+                            height=plan.height, fps=plan.fps, audio_path=None,
+                            crf=selected.crf, preset=selected.preset, input_seeking=True,
+                            final_filter=chunk_ass_filter, cwd=temp_dir, cancel=cancelled,
+                        )
+                        return chunk_path
+
+                    # Process chunks in parallel
+                    with ThreadPoolExecutor(max_workers=max_parallel, thread_name_prefix="editor-render-chunk") as executor:
+                        # Submit all chunks
+                        future_to_idx = {
+                            executor.submit(process_chunk, i, start, end): i
+                            for i, (start, end) in enumerate(chunks)
+                        }
+
+                        # Collect results in order
+                        chunk_results = [None] * len(chunks)
+                        for future in as_completed(future_to_idx):
+                            idx = future_to_idx[future]
+                            try:
+                                chunk_results[idx] = future.result()
+                            except Exception as e:
+                                failed.set()
+                                for f in future_to_idx:
+                                    f.cancel()
+                                raise e
+
+                    # Verify all chunks were processed successfully
+                    chunk_videos = []
+                    for chunk_result in chunk_results:
+                        if chunk_result is None:
+                            raise EditorRenderError("Chunk processing failed")
+                        chunk_videos.append(chunk_result)
+
+                    # Join chunks with concat demuxer
+                    concat_list_path = temp_dir / "concat_list.txt"
+                    with open(concat_list_path, 'w') as f:
+                        for video_path in chunk_videos:
+                            # Use relative paths from temp_dir
+                            relative_path = video_path.relative_to(temp_dir)
+                            f.write(f"file '{relative_path}'\n")
+
+                    final_video_path = temp_dir / "video.mp4"
+                    cmd = [FFMPEG_EXE, "-y", "-fflags", "+bitexact", *FFMPEG_NETWORK_SAFE[1:],
+                           "-f", "concat", "-safe", "0", "-i", str(concat_list_path),
+                           "-c", "copy", str(final_video_path.with_suffix('.partial.mp4'))]
+                    run_ffmpeg_atomic(cmd, final_video_path, cancel=cancelled, label="chunk concat mux", cwd=temp_dir)
+
                     timings["video"] = float(time.perf_counter() - began)
-                    return path
+                    return final_video_path
 
                 self._check_cancel(cancel)
                 self._emit(progress, 0.1, "Rendering audio and video")

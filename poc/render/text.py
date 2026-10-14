@@ -37,6 +37,8 @@ class TextOverlay:
     outline_px: int = 3
     bold: bool = False
     fade_ms: int = 150
+    fade_in_ms: int | None = None
+    fade_out_ms: int | None = None
     font: str = "Noto Sans"
 
 
@@ -105,7 +107,11 @@ def build_ass(overlays: list[TextOverlay], width: int, height: int) -> str:
         x = round(overlay.x * width)
         y = round(overlay.y * height)
         duration = overlay.end_ms - overlay.start_ms
-        fade = min(max(0, overlay.fade_ms), duration // 2)
+        # Use custom fade times if provided, otherwise fall back to fade_ms
+        fade_in = overlay.fade_in_ms if overlay.fade_in_ms is not None else overlay.fade_ms
+        fade_out = overlay.fade_out_ms if overlay.fade_out_ms is not None else overlay.fade_ms
+        fade_in = min(max(0, fade_in), duration // 2)
+        fade_out = min(max(0, fade_out), duration // 2)
         # ASS uses em units; convert the requested visible pixel height to its
         # font-size unit so cap-height text matches the size_pct contract.
         font_size = max(1, round(overlay.size_pct * height * 1.7))
@@ -113,7 +119,7 @@ def build_ass(overlays: list[TextOverlay], width: int, height: int) -> str:
         tags = (
             f"\\fn{overlay.font}\\fs{font_size}\\b{bold}"
             f"\\c{_ass_color(overlay.color)}&\\bord{max(0, overlay.outline_px)}"
-            f"\\an5\\pos({x},{y})\\fad({fade},{fade})"
+            f"\\an5\\pos({x},{y})\\fad({fade_in},{fade_out})"
         )
         lines.append(
             f"Dialogue: 0,{_ass_time(overlay.start_ms)},{_ass_time(overlay.end_ms)},"
