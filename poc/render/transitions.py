@@ -132,23 +132,22 @@ def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int,
         right_h = join_frames[index] // 2 if index < len(joins) else 0
         clip_frames = left_h + base_frames[index] + right_h
         source_start_ms = segment.src_in_ms - left_h * 1000 / fps
-        # Phone videos have variable frame rates and can skip frames for half a second or more.
-        # A short cut inside such a gap would decode no frames at all (and an empty segment ends
-        # every transition after it). So frames are put on the output grid first, from a little
-        # before the cut (the last real frame fills the gap), and only then is the cut taken.
-        if input_seeking:
-            first = _preroll_frames(source_start_ms, fps)          # the input starts this much early
-        else:
-            first = round(source_start_ms * fps / 1000)
+        # Phone videos have variable frame rates and can skip frames for half a second or more,
+        # and FFmpeg 7.1's fps filter drops the last frame when its input ends right at the cut.
+        # So timestamps are shifted to put the cut at exactly 0, fps puts frames on the output
+        # grid from up to 1 s BEFORE the cut to well after it (a gap shows the last real frame),
+        # and then frames 0 .. N-1 are taken by count. Nothing after fps touches timestamps, so
+        # the frame rate xfade needs is kept.
+        lead = _preroll_frames(source_start_ms, fps) if input_seeking else round(source_start_ms * fps / 1000)
         norm = build_normalize_filter(normalized)
         fit = build_fit_filter(
             normalized.width, normalized.height, width, height, "cover", (0.5, 0.5)
         )
         fit = fit.replace("[0:v]", f"[norm{index}]", 1).replace("[outv]", f"[fit{index}]")
         graph.append(
-            f"[{index}:v]fps={fps}:start_time=0,trim=start_frame={first}:end_frame={first + clip_frames},"
-            f"setpts=PTS-STARTPTS,{norm}[norm{index}];{fit};[fit{index}]fps={fps},"
-            f"{segment.vfilter + ',' if segment.vfilter else ''}format=yuv420p,"
+            f"[{index}:v]setpts=PTS-{_seconds(lead / fps)}/TB,fps={fps}:start_time={_seconds(-lead / fps)},"
+            f"trim=start_frame={lead}:end_frame={lead + clip_frames},{norm}[norm{index}];{fit};"
+            f"[fit{index}]{segment.vfilter + ',' if segment.vfilter else ''}format=yuv420p,"
             f"setsar=1,settb=1/{fps},tpad=stop_mode=clone:stop_duration=1,"
             f"trim=end_frame={clip_frames}[v{index}]"
         )
@@ -222,10 +221,10 @@ def render_sequence_to_file(
     partial = out_path.with_name(f"{out_path.stem}.{os.getpid()}.partial{out_path.suffix}")
     cmd = [FFMPEG_EXE, "-y", "-fflags", "+bitexact", *FFMPEG_NETWORK_SAFE[1:]]
     for index, segment in enumerate(segments):
+        left_h = join_frames[index - 1] // 2 if index > 0 else 0
+        right_h = join_frames[index] // 2 if index < len(joins) else 0
+        start_ms = segment.src_in_ms - left_h * 1000 / fps
         if input_seeking:
-            left_h = join_frames[index - 1] // 2 if index > 0 else 0
-            right_h = join_frames[index] // 2 if index < len(joins) else 0
-            start_ms = segment.src_in_ms - left_h * 1000 / fps
             end_ms = segment.src_out_ms + right_h * 1000 / fps
             early_ms = _preroll_frames(start_ms, fps) * 1000 / fps
             # read from a little earlier and a little longer (see build_sequence_graph)

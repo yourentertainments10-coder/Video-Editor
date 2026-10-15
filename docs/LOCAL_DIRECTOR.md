@@ -140,6 +140,9 @@ undo/redo, full 1080x1920 export). Fixed:
   (18.9 s reel came out 16.4 s). Frames are now put on the output grid from up to 1 s before
   each cut, so a gap shows the last real frame (`poc/render/transitions.py`).
 - Titles in later render chunks were placed with the wrong offset and disappeared.
+- FFmpeg 7.1 (the Windows build of imageio-ffmpeg) drops the last frame in `fps` when its input
+  ends right at a cut, which shortened every cut by a frame and cut styled exports short. Cuts are
+  now taken by frame count after `fps` from a longer window; checked with both 7.0 and 7.1.
 - Three or more `deshake` filters in one FFmpeg graph crash FFmpeg (SIGSEGV): shaky clips are
   now stabilised one by one into temp files before the main render.
 - Exports have a bitrate ceiling (VBV): film grain made a 19 s reel 220 MB, now about 25-40 MB.
