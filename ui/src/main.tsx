@@ -23,6 +23,8 @@ import { commandForKey } from './timeline/keys';
 import { clipVolume, formatTimecode, nextEditPoint, playbackSource, stepFrames, upcomingAsset } from './timeline/navigation';
 import './style.css';
 
+const TYPING_FIELDS = 'textarea,[contenteditable=true],input:not([type=color]):not([type=checkbox]):not([type=range]):not([type=radio])';
+
 const profiles = ['preview_540p', 'youtube_1080p', 'reels_9x16', 'square_1x1'];
 
 function App() {
@@ -277,9 +279,13 @@ function App() {
   }, [musicSource?.clip_id, playbackAudioUrl, seekSerial, playing]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement | null)?.matches('input,textarea,select,[contenteditable=true]')) return;
+      const target = event.target as HTMLElement | null;
+      // typing fields keep their own keys (and native undo); a dropdown, colour or checkbox only
+      // lets the edit shortcuts through, so Ctrl+Z still undoes a change just picked there
+      if (target?.matches(TYPING_FIELDS)) return;
       const command = commandForKey(event);
       if (!command) return;
+      if (target?.matches('input,select') && !['undo', 'redo', 'saveNow'].includes(command)) return;
       event.preventDefault();
       if (!timeline) return;
       const fps = timeline.settings.fps_num / timeline.settings.fps_den;

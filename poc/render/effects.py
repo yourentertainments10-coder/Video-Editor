@@ -210,7 +210,7 @@ def _amount_effect(effect_id: str, a: float, width: int, height: int) -> str:
     if effect_id == "vignette":
         return f"vignette=angle={_num(0.25 + 0.5 * a)}"
     if effect_id == "grain":
-        return f"noise=alls={round(4 + 22 * a)}:allf=t"
+        return f"noise=alls={round(3 + 12 * a)}:allf=t"     # fine grain: strong noise only adds megabytes
     if effect_id == "sharpen":
         return f"unsharp=5:5:{_num(1.5 * a)}"
     if effect_id == "rgb_split":

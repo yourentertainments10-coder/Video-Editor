@@ -88,3 +88,45 @@ def test_which_clips_have_faces():
     assert tags_in("which shots have no faces") == ["no-faces"]
     assert tags_in("clips that don't have people") == ["no-faces"]
     assert tags_in("which clips show people") == ["faces"]
+
+
+def _sfx():
+    from poc.timeline import MediaAsset
+    return {n: MediaAsset(asset_id=f"sfx_{n}", kind="audio", uri=f"/s/{n}.wav", duration_ms=2000)
+            for n in ("whoosh", "whoosh_soft", "impact", "riser")}
+
+
+def test_shortening_ignores_sound_effects_and_keeps_an_end_title_at_the_end():
+    from poc.timeline import validate_editor_timeline
+    tl, _ = plan_style(timeline(n=24, clip_ms=800, beat_ms=400), mood="energetic", style="bold", sfx=_sfx())
+    tl, _ = apply_operations(tl, parse_revision("title 'Goa' at the end", tl).operations)
+    assert any(c.clip_id.startswith("sfx_") for c in tl.clips)
+    out, _ = apply_operations(tl, parse_revision("make it 15 seconds", tl).operations)
+    assert out.duration_ticks == 15000
+    assert max(c.start_tick + c.duration_ticks for c in out.clips) <= 15000
+    title = next(c for c in out.clips if c.track_id == "overlay")
+    assert title.start_tick + title.duration_ticks == 15000
+    assert validate_editor_timeline(out) == []
+
+
+def test_light_leaks_from_the_chat():
+    tl = timeline(n=8, clip_ms=1000, beat_ms=500)
+    out, _ = apply_operations(tl, parse_revision("add a light leak to clip 2", tl).operations)
+    leaks = [(c.clip_id, e.parameters.model_dump()) for c in out.clips for e in c.effects if e.effect_id == "light_leak"]
+    assert leaks == [("c1", {"at_ms": 0, "duration_ms": 700, "amount": 0.5})]
+    out, _ = apply_operations(out, parse_revision("remove the light leaks", out).operations)
+    assert not any(e.effect_id == "light_leak" for c in out.clips for e in c.effects)
+
+
+GUIDE = ROOT_GUIDE = __import__("pathlib").Path(__file__).resolve().parents[2] / "docs" / "USER_GUIDE.md"
+
+
+def test_every_chat_phrase_in_the_user_guide_is_understood():
+    import re
+    section = GUIDE.read_text(encoding="utf-8").split("## 3.")[1].split("## 4.")[0]
+    phrases = [p for p in re.findall(r"`([^`]+)`", section) if not p.startswith("ek naya")]
+    assert len(phrases) > 30
+    tl = apply_style(timeline(n=12, clip_ms=1000), title="Goa")
+    for phrase in phrases:
+        assert parse_revision(phrase, tl).intent != "unknown", phrase
+    assert parse_brief("ek naya reel banao 20 second", []).brief.duration_s == 20

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -120,6 +121,11 @@ _TRANSITION_MAP = {
         "squeeze", "slice", "wind", "diagonal", "fade_mono")},
 }
 
+
+
+# FFmpeg's deshake crashes (SIGSEGV) when three or more run in one filter graph, so each
+# stabilised clip is rendered on its own first (see EditorRenderer._stabilise).
+_STABILISE = re.compile(r"deshake=rx=\d+:ry=\d+,crop=[^,]+:[^,]+,scale=\d+:\d+")
 
 
 def _title_style(metadata: dict | None) -> dict:
@@ -582,6 +588,35 @@ class EditorRenderer:
                         file = Path(item.path or "")
                     resolved_segments.append((item, file))
 
+                # shaky clips: stabilised one by one into temp files (index -> path, source in, rest of filters)
+                stable: dict[int, tuple[Path, int, str]] = {}
+                for index, (item, path) in enumerate(resolved_segments):
+                    match = _STABILISE.search(item.vfilter) if item.kind == "video" else None
+                    if match is None:
+                        continue
+                    self._check_cancel(cancel)
+                    left_ms = min(int(item.source_in_ms or 0), round(item.transition_frames * 1000 / plan.fps))
+                    right_frames = (plan.video_segments[index + 1].transition_frames
+                                    if index + 1 < len(plan.video_segments) else 0)
+                    span_ms = round((item.duration_frames + right_frames) * 1000 / plan.fps)
+                    start_ms = int(item.source_in_ms or 0) - left_ms
+                    stable_path = render_sequence_to_file(
+                        [Segment(path=path, src_in_ms=start_ms, src_out_ms=start_ms + left_ms + span_ms,
+                                 vfilter=match.group(0))], [],
+                        temp_dir / f"stable_{index:04d}.mp4", width=plan.width, height=plan.height,
+                        fps=plan.fps, crf=12, preset="veryfast", input_seeking=True, cwd=temp_dir,
+                        cancel=cancel,
+                    )
+                    rest = (item.vfilter[:match.start()] + item.vfilter[match.end():]).replace(",,", ",").strip(",")
+                    stable[index] = (stable_path, left_ms, rest)
+
+                def video_segment(index: int, segment: Segment) -> Segment:
+                    if index not in stable:
+                        return segment
+                    stable_path, left_ms, rest = stable[index]
+                    return Segment(path=stable_path, src_in_ms=left_ms,
+                                   src_out_ms=left_ms + segment.src_out_ms - segment.src_in_ms, vfilter=rest)
+
                 actual_segments: list[Segment] = []
                 actual_joins: list[Join] = []
                 audio_options: list[dict] = []
@@ -680,9 +715,10 @@ class EditorRenderer:
                     # If only one chunk, use original path
                     if len(chunks) == 1:
                         path = render_sequence_to_file(
-                            actual_segments, joins, temp_dir / "video.mp4", width=plan.width,
+                            [video_segment(i, seg) for i, seg in enumerate(actual_segments)], joins,
+                            temp_dir / "video.mp4", width=plan.width,
                             height=plan.height, fps=plan.fps, audio_path=None,
-                            crf=selected.crf, preset=selected.preset, input_seeking=True,
+                            crf=selected.crf, preset=selected.preset, input_seeking=True, max_kbps=selected.max_kbps,
                             final_filter=ass_filter, cwd=temp_dir, cancel=cancelled,
                         )
                         timings["video"] = float(time.perf_counter() - began)
@@ -710,10 +746,10 @@ class EditorRenderer:
                             source_in = (0 if item.kind == "gap" else
                                          round(left_frames * 1000 / plan.fps) if item.kind == "image" else
                                          int(item.source_in_ms or 0))
-                            chunk_segments.append(Segment(
+                            chunk_segments.append(video_segment(i, Segment(
                                 path=path, src_in_ms=source_in, src_out_ms=source_in + base_ms,
                                 vfilter=item.vfilter,
-                            ))
+                            )))
 
                             # Add join to next segment (except for last segment in chunk)
                             if i < chunk_end - 1:
@@ -725,9 +761,9 @@ class EditorRenderer:
 
                         # Calculate chunk timing
                         vs_segments = [item[0] for item in resolved_segments[chunk_start:chunk_end]]
-                        chunk_start_frames = sum(
-                            vs.duration_frames for vs in vs_segments[0:chunk_start]
-                        ) if chunk_start > 0 else 0
+                        chunk_start_frames = sum(       # frames of every chunk BEFORE this one
+                            item[0].duration_frames for item in resolved_segments[:chunk_start]
+                        )
                         chunk_duration_frames = sum(
                             vs.duration_frames for vs in vs_segments
                         )
@@ -790,7 +826,7 @@ class EditorRenderer:
                         render_sequence_to_file(
                             chunk_segments, chunk_joins, chunk_path, width=plan.width,
                             height=plan.height, fps=plan.fps, audio_path=None,
-                            crf=selected.crf, preset=selected.preset, input_seeking=True,
+                            crf=selected.crf, preset=selected.preset, input_seeking=True, max_kbps=selected.max_kbps,
                             final_filter=chunk_ass_filter, cwd=temp_dir, cancel=cancelled,
                         )
                         return chunk_path

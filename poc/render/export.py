@@ -29,13 +29,14 @@ class ExportProfile:
     audio_bitrate: str
     target_lufs: float = -14.0
     true_peak_db: float = -1.0
+    max_kbps: int | None = None      # quality stays constant (crf) but never above this (VBV cap)
 
 
 EXPORT_PROFILES: dict[str, ExportProfile] = {
-    "youtube_1080p": ExportProfile("youtube_1080p", 1920, 1080, 30, 18, "medium", "192k"),
-    "reels_9x16": ExportProfile("reels_9x16", 1080, 1920, 30, 20, "medium", "192k"),
-    "square_1x1": ExportProfile("square_1x1", 1080, 1080, 30, 20, "medium", "192k"),
-    "preview_540p": ExportProfile("preview_540p", 960, 540, 30, 28, "veryfast", "128k"),
+    "youtube_1080p": ExportProfile("youtube_1080p", 1920, 1080, 30, 18, "medium", "192k", max_kbps=16000),
+    "reels_9x16": ExportProfile("reels_9x16", 1080, 1920, 30, 20, "medium", "192k", max_kbps=14000),
+    "square_1x1": ExportProfile("square_1x1", 1080, 1080, 30, 20, "medium", "192k", max_kbps=12000),
+    "preview_540p": ExportProfile("preview_540p", 960, 540, 30, 28, "veryfast", "128k", max_kbps=4000),
 }
 
 
@@ -253,6 +254,7 @@ def export_sequence(
             segments, joins, temp_dir / "render.mp4", width=selected.width,
             height=selected.height, fps=selected.fps, audio_path=final_audio,
             crf=selected.crf, preset=selected.preset, audio_bitrate=selected.audio_bitrate,
+            max_kbps=selected.max_kbps,
         )
         report = verify_render(
             rendered, expected_width=selected.width, expected_height=selected.height,

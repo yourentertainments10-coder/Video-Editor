@@ -130,6 +130,29 @@ clear "I don't understand X; try one of: …" instead of a guess.
   never over the user's own voice clips; hidden from the media bin; "remove the sound effects".
 - Footage questions: "which clips have faces?", "clips that don't have people".
 
+## Implementation status (quality pass, phase 3c)
+
+Checked end to end on real phone footage (Director chat, manual editing in the Inspector,
+undo/redo, full 1080x1920 export). Fixed:
+
+- Phone videos with variable frame rate can skip frames for half a second or more. A short
+  cut inside such a gap decoded no frames, and the transitions after it ended the export early
+  (18.9 s reel came out 16.4 s). Frames are now put on the output grid from up to 1 s before
+  each cut, so a gap shows the last real frame (`poc/render/transitions.py`).
+- Titles in later render chunks were placed with the wrong offset and disappeared.
+- Three or more `deshake` filters in one FFmpeg graph crash FFmpeg (SIGSEGV): shaky clips are
+  now stabilised one by one into temp files before the main render.
+- Exports have a bitrate ceiling (VBV): film grain made a 19 s reel 220 MB, now about 25-40 MB.
+- Peaky songs stopped at about -16 LUFS: the mix is now brought up and peak-limited (with delay
+  compensation) before loudness normalisation, so exports reach -14 LUFS.
+- "make it 15 seconds" failed when sound effects or an end title were present; the video track
+  now sets the length, an end title stays at the end.
+- "add a light leak to clip 2" was not understood.
+- Ctrl+Z did nothing right after picking from an Inspector dropdown; sound-effect clips asked
+  for thumbnails that don't exist.
+
+User guide: `docs/USER_GUIDE.md`.
+
 ## 2. Components
 
 ```

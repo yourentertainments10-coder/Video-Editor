@@ -66,6 +66,8 @@ This is not a finished end-user commercial editor, but it is significantly more 
 
 ## Quick start
 
+Using the editor (Director chat, manual editing, export): see [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
+
 ### Requirements
 
 - Python 3.11+

@@ -113,6 +113,14 @@ def _validate(segments, joins, width: int, height: int, fps: int):
     return media, base_frames, join_frames
 
 
+PREROLL_S = 1.0     # how far before a cut frames are read, to bridge gaps in variable-frame-rate video
+
+
+def _preroll_frames(start_ms: float, fps: int) -> int:
+    """Whole output frames read before the cut (up to PREROLL_S, never before the file start)."""
+    return max(0, min(round(PREROLL_S * fps), int(start_ms * fps / 1000 + 1e-6)))
+
+
 def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int,
                          input_seeking: bool = False,
                          final_filter: str | None = None) -> str:
@@ -124,22 +132,22 @@ def build_sequence_graph(segments, joins, *, width: int, height: int, fps: int,
         right_h = join_frames[index] // 2 if index < len(joins) else 0
         clip_frames = left_h + base_frames[index] + right_h
         source_start_ms = segment.src_in_ms - left_h * 1000 / fps
-        source_end_ms = segment.src_out_ms + right_h * 1000 / fps
+        # Phone videos have variable frame rates and can skip frames for half a second or more.
+        # A short cut inside such a gap would decode no frames at all (and an empty segment ends
+        # every transition after it). So frames are put on the output grid first, from a little
+        # before the cut (the last real frame fills the gap), and only then is the cut taken.
         if input_seeking:
-            trim_start = 0
-            trim_end = (source_end_ms - source_start_ms) / 1000
+            first = _preroll_frames(source_start_ms, fps)          # the input starts this much early
         else:
-            trim_start = source_start_ms / 1000
-            trim_end = source_end_ms / 1000
+            first = round(source_start_ms * fps / 1000)
         norm = build_normalize_filter(normalized)
         fit = build_fit_filter(
             normalized.width, normalized.height, width, height, "cover", (0.5, 0.5)
         )
         fit = fit.replace("[0:v]", f"[norm{index}]", 1).replace("[outv]", f"[fit{index}]")
         graph.append(
-            f"[{index}:v]trim=start={_seconds(trim_start)}:"
-            f"end={_seconds(trim_end)},setpts=PTS-STARTPTS,{norm}"
-            f"[norm{index}];{fit};[fit{index}]fps={fps},"
+            f"[{index}:v]fps={fps}:start_time=0,trim=start_frame={first}:end_frame={first + clip_frames},"
+            f"setpts=PTS-STARTPTS,{norm}[norm{index}];{fit};[fit{index}]fps={fps},"
             f"{segment.vfilter + ',' if segment.vfilter else ''}format=yuv420p,"
             f"setsar=1,settb=1/{fps},tpad=stop_mode=clone:stop_duration=1,"
             f"trim=end_frame={clip_frames}[v{index}]"
@@ -202,6 +210,7 @@ def render_sequence_to_file(
     final_filter: str | None = None,
     cwd: Path | None = None,
     cancel: Callable[[], bool] | None = None,
+    max_kbps: int | None = None,
 ) -> Path:
     """Render a deterministic silent H.264 sequence with atomic replacement."""
     graph = build_sequence_graph(segments, joins, width=width, height=height, fps=fps,
@@ -218,8 +227,10 @@ def render_sequence_to_file(
             right_h = join_frames[index] // 2 if index < len(joins) else 0
             start_ms = segment.src_in_ms - left_h * 1000 / fps
             end_ms = segment.src_out_ms + right_h * 1000 / fps
-            cmd.extend(["-ss", _seconds(start_ms / 1000),
-                        "-t", _seconds((end_ms - start_ms) / 1000)])
+            early_ms = _preroll_frames(start_ms, fps) * 1000 / fps
+            # read from a little earlier and a little longer (see build_sequence_graph)
+            cmd.extend(["-ss", _seconds(max(0.0, start_ms - early_ms) / 1000),
+                        "-t", _seconds((end_ms - start_ms + early_ms) / 1000 + PREROLL_S)])
         cmd.extend(["-i", str(segment.path)])
     if audio_path is not None:
         cmd.extend(["-i", str(audio_path)])
@@ -231,6 +242,7 @@ def render_sequence_to_file(
         "-filter_complex", graph, "-map", "[outv]", *audio_args,
         "-frames:v", str(total_frames), "-r", str(fps),
         "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p",
+        *(["-maxrate", f"{max_kbps}k", "-bufsize", f"{2 * max_kbps}k"] if max_kbps else []),
         "-flags:v", "+bitexact", "-map_metadata", "-1",
         "-colorspace", "bt709", "-color_primaries", "bt709",
         "-color_trc", "bt709", "-color_range", "tv",

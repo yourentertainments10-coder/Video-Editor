@@ -128,7 +128,7 @@ export function TimelineEditor({ timeline, assets, projectId, selectedId, onSele
                 onClick={event => { event.stopPropagation(); onSelect(clip.clip_id); }}
                 style={{ left: clip.start_tick * scale, width: Math.max(36, clip.duration_ticks * scale) }} title={`${asset?.file_name ?? asset?.text ?? 'Clip'} · ${Math.round(clip.duration_ticks)} ticks`}>
                 <span className="trim-handle left" onPointerDown={event => beginTrim(event, clip.clip_id, 'start')} />
-                {asset?.kind !== 'text' && Number((asset as any)?.thumbnail_count ?? 10) > 0 && <img src={thumbnailUrl(projectId, clip.asset_id)} alt="" />}
+                {(asset?.kind === 'video' || asset?.kind === 'image') && Number((asset as any)?.thumbnail_count ?? 10) > 0 && <img src={thumbnailUrl(projectId, clip.asset_id)} alt="" />}
                 <span className="clip-name">{numbers.has(clip.clip_id) && <b className="clip-number">#{numbers.get(clip.clip_id)}</b>}{String(asset?.kind === 'text' ? asset.text ?? '' : asset?.file_name ?? clip.asset_id)}</span>
                 {issueCount > 0 && <b className="issue-badge" title={issues.filter(issue => issue.clip_id === clip.clip_id).map(i => i.message).join('\n')}>{issueCount}</b>}
                 <span className="trim-handle right" onPointerDown={event => beginTrim(event, clip.clip_id, 'end')} />

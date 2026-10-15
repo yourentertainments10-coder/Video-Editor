@@ -347,7 +347,8 @@ _LOOK_WORDS = {"cinematic": "cinematic", "movie": "cinematic", "filmy": "cinemat
                "faded": "matte", "film": "matte"}
 _TEXTURES = [(r"\b(?:film )?grain\b|\bgrainy\b", "grain", "film grain"), (r"\bvignette\b", "vignette", "a vignette"),
              (r"\bglow(?:ing|y)?\b|\bbloom\b|\bdreamy glow\b", "glow", "a soft glow"),
-             (r"\brgb split\b|\bchromatic\b|\bglitch (?:look|effect|style)\b", "rgb_split", "an RGB-split glitch look")]
+             (r"\brgb split\b|\bchromatic\b|\bglitch (?:look|effect|style)\b", "rgb_split", "an RGB-split glitch look"),
+             (r"\blight[\s-]?leaks?\b|\blens flares?\b|\bflares?\b|\bwarm leaks?\b", "light_leak", "a warm light leak")]
 _FAMILY_WORDS = [(r"zoom(?:ing)?", "zoom"), (r"slid(?:e|es|ing)|push", "slide"), (r"wipes?", "wipe"),
                  (r"whip|blur(?:ry)?|swish", "blur"), (r"glitch(?:y)?|pixel(?:ated|s|ize)?|digital", "glitch"),
                  (r"circle|circular|iris|round", "circle"), (r"(?:white )?flash(?:y)?", "flash"),
@@ -376,7 +377,8 @@ def _style_request(t: str, clips: list[EditorClip], ids: list[str], refs: "_Refs
     # the whole finishing pass
     if re.search(r"\b(?:style it|make it (?:look )?(?:pro|professional|better|awesome|amazing|fire|lit|viral|cool)|"
                  r"add (?:some )?effects|auto(?:matic)? effects|effects (?:lagao|daalo|dalo|add karo)|jazz it up|"
-                 r"spice it up|polish it|finish it|edit (?:it )?like a pro|make it pop|style karo)\b", t):
+                 r"spice it up|polish it|finish it|edit (?:it )?like a pro|make it pop|style karo|"
+                 r"(?:bold|crazy|flashy|wild|heavy|more|lots of|zyada|jyada|max(?:imum)?|extra) effects)\b", t):
         bold = bool(re.search(r"\b(?:bold|crazy|lots of|more|zyada|jyada|heavy|extreme|max)\b", t))
         style = "bold" if bold else "auto"
         words = (f"{'Bold' if bold else 'Auto'} finishing pass: transitions on the strongest beats, beat accents, "
@@ -707,19 +709,25 @@ def _ripple(tl: EditorTimeline, clips: list[EditorClip], after_tick: int, delta:
 
 
 def _fit_music_and_length(tl: EditorTimeline, clips: list[EditorClip]) -> EditorTimeline:
-    visual_end = max((c.start_tick + c.duration_ticks for c in clips if c.track_id != "music"), default=0)
+    """The video track decides the length. Music, sound effects, voice and titles past the new
+    end are cut there (or dropped); a title that ended with the old video still ends with the new one."""
+    video_end = max((c.start_tick + c.duration_ticks for c in clips if c.track_id == "video"), default=None)
+    visual_end = video_end if video_end is not None else \
+        max((c.start_tick + c.duration_ticks for c in clips if c.track_id != "music"), default=0)
+    old_end = tl.duration_ticks
     fitted = []
     for c in clips:
-        if c.track_id == "music" and c.start_tick + c.duration_ticks > visual_end:
-            new_dur = max(1, visual_end - c.start_tick)
-            update = {"duration_ticks": new_dur}
-            if c.source_in_ms is not None:
-                update["source_out_ms"] = c.source_in_ms + int(round(_ms(tl, new_dur)))
-            c = c.model_copy(update=update)
-        elif c.track_id == "overlay" and c.start_tick + c.duration_ticks > visual_end:
+        end = c.start_tick + c.duration_ticks
+        if c.track_id == "overlay" and end >= old_end and end > visual_end and c.duration_ticks <= visual_end:
+            c = c.model_copy(update={"start_tick": visual_end - c.duration_ticks})    # an end title stays at the end
+        elif c.track_id != "video" and end > visual_end:
             if c.start_tick >= visual_end:
                 continue
-            c = c.model_copy(update={"duration_ticks": visual_end - c.start_tick})
+            new_dur = visual_end - c.start_tick
+            update = {"duration_ticks": new_dur}
+            if c.source_in_ms is not None and c.track_id != "overlay":
+                update["source_out_ms"] = c.source_in_ms + int(round(_ms(tl, new_dur)))
+            c = c.model_copy(update=update)
         fitted.append(c)
     markers = [m for m in tl.markers if m.position_tick < visual_end]
     return tl.model_copy(update={"clips": fitted, "duration_ticks": max(1, visual_end), "markers": markers})
@@ -963,7 +971,12 @@ def apply_operations(timeline: EditorTimeline, operations: list[Operation],
             for c in tl.clips:
                 if c.clip_id in targets:
                     kept = [e for e in c.effects if e.effect_id != op.effect_id]
-                    if op.amount:
+                    if op.amount and op.effect_id == "light_leak":
+                        ms = _ms(tl, c.duration_ticks)          # a flare that comes and goes at the start of the clip
+                        if ms >= 600:
+                            kept.append(EffectRef(effect_id="light_leak", parameters={
+                                "at_ms": 0, "duration_ms": int(min(1200, ms * 0.7)), "amount": op.amount}))
+                    elif op.amount:
                         kept.append(EffectRef(effect_id=op.effect_id, parameters={"amount": op.amount}))
                     c = c.model_copy(update={"effects": kept})
                 updated.append(c)

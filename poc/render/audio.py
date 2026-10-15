@@ -196,6 +196,7 @@ def loudness_normalize(
     target_lufs: float = -14.0,
     true_peak_db: float = -1.0,
     cancel: Callable[[], bool] | None = None,
+    _limited: bool = False,
 ) -> Path:
     common = [FFMPEG_EXE, "-hide_banner", "-nostats", *FFMPEG_NETWORK_SAFE[1:], "-i", str(in_path)]
     from poc.render._process import run_process
@@ -209,6 +210,28 @@ def loudness_normalize(
     if not matches:
         raise RuntimeError(f"FFmpeg loudnorm did not return measurement JSON: {pass1.stderr}")
     measured = json.loads(matches[-1])
+    try:
+        gain = target_lufs - float(measured["input_i"])
+        peak_after = float(measured["input_tp"]) + gain
+    except (TypeError, ValueError):
+        gain = peak_after = 0.0
+    if not _limited and float(measured.get("input_i", -99) or -99) > -60 and peak_after > true_peak_db:
+        # A peaky mix cannot reach the target without clipping, and loudnorm would stop short
+        # (a song at -16 LUFS instead of -14). Bring it up and limit the peaks first (with the
+        # limiter's delay compensated, so sync is exact), then normalise as usual.
+        limited = Path(out_path).with_name(f"{Path(out_path).stem}.limited.wav")
+        ceiling = 10 ** ((true_peak_db - 1.5) / 20)
+        run_ffmpeg_atomic(
+            [FFMPEG_EXE, "-y", "-hide_banner", *FFMPEG_NETWORK_SAFE[1:], "-i", str(in_path), "-af",
+             f"volume={gain:.3f}dB,alimiter=limit={ceiling:.6f}:attack=2:release=80:level=disabled:latency=1",
+             *_wav_output_args(), str(limited)],
+            limited, cancel=cancel, label="peak limiting",
+        )
+        try:
+            return loudness_normalize(limited, out_path, target_lufs=target_lufs, true_peak_db=true_peak_db,
+                                      cancel=cancel, _limited=True)
+        finally:
+            limited.unlink(missing_ok=True)
     filt = (
         f"loudnorm=I={target_lufs}:TP={true_peak_db}:LRA=11:"
         f"measured_I={measured['input_i']}:measured_TP={measured['input_tp']}:"
